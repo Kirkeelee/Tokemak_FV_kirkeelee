@@ -36,10 +36,10 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
     /* Immutable Config                 */
     /* ******************************** */
     /// @notice Tokemak system-level registry. Used to lookup other services (e.g., pricing)
-    ISystemRegistry public immutable systemRegistry;
+    ISystemRegistry public systemRegistry;      // HARNESS: removed immutable
 
     /// @notice The LMPVault that this strategy is associated with
-    ILMPVault public immutable lmpVault;
+    ILMPVault public lmpVault;                  // HARNESS: removed immutable
 
     /// @notice the number of days to pause rebalancing due to NAV decay
     uint16 public immutable pauseRebalancePeriodInDays;

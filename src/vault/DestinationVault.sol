@@ -37,7 +37,7 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
     error DuplicateToken(address token);
     error VaultShutdown();
 
-    ISystemRegistry internal immutable _systemRegistry;
+    ISystemRegistry internal immutable _systemRegistry; // HARNESS: removed immutable
 
     /* ******************************** */
     /* State Variables                  */
