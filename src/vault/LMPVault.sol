@@ -166,7 +166,7 @@ contract LMPVault is
         _;
         _ensureNoNavChange(oldNav, startingTotalSupply);
     }
-
+ 
     modifier noNavDecrease() {
         (uint256 oldNav, uint256 startingTotalSupply) = _snapStartNav();
         _;
