@@ -17,4 +17,6 @@ artifacts/
 cache_hardhat/
 typechain-types/
 
+crytic-export/
+
 .certora_internal

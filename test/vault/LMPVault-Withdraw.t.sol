@@ -39,6 +39,9 @@ contract LMPVaultTests is Test {
     TestERC20 private _asset;
     LMPVaultMinting private _lmpVault;
 
+    event ManagementFeeSinkSet(address newManagementFeeSinkSet);
+    event ManagementFeeSet(uint256 newFee);
+
     function setUp() public {
         vm.label(address(this), "testContract");
 
@@ -82,6 +85,40 @@ contract LMPVaultTests is Test {
         vm.prank(feeSetter);
         _lmpVault.setPerformanceFeeBps(6);
     }
+
+    // Testing `setManagementFeeSink()`
+    function test_setManagementFeeSink_RequiresOwner() public {
+        vm.expectRevert(Errors.AccessDenied.selector);
+        vm.prank(vm.addr(2));
+        _lmpVault.setManagementFeeSink(vm.addr(1));
+    }
+
+    function test_setManagementFeeSink_RunsProperly() public {
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSinkSet(vm.addr(1));
+        _lmpVault.setManagementFeeSink(vm.addr(1));
+
+        assertEq(_lmpVault.managementFeeSink(), vm.addr(1));
+
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSinkSet(address(0));
+        _lmpVault.setManagementFeeSink(address(0));
+
+        assertEq(_lmpVault.managementFeeSink(), address(0));
+    }
+
+    // Testing `setManagementFeeBps()`
+    // Sets pendingManagementFee when necessary
+    function test_setManagementFeeBps_RequiresRole() public {
+        vm.expectRevert(Errors.AccessDenied.selector);
+        _lmpVault.setManagementFeeBps(0);
+    }
+
+    function test_setManagementFeeBps_RevertsInvalidFee() public {
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        vm.expectRevert(abi.encodeWithSelector(LMPVault.InvalidFee.selector, 1001));
+        _lmpVault.setManagementFeeBps(1001);
+    }
 }
 
 contract LMPVaultMintingTests is Test {
@@ -122,6 +159,12 @@ contract LMPVaultMintingTests is Test {
         address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares
     );
     event SymbolAndDescSet(string symbol, string desc);
+    event ManagementFeeSet(uint256 newFee);
+    event ManagementFeeSinkSet(address newManagementFeeSink);
+    event PendingManagementFeeSet(uint256 pendingManagementFee);
+    event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares);
+    event ManagementFeeCollected(uint256 fees, address feeSink, uint256 mintedShares);
+    event NextManagementFeeTakeSet(uint256 nextManagementFeeTake);
 
     uint256 private constant MAX_FEE_BPS = 10_000;
 
@@ -228,7 +271,6 @@ contract LMPVaultMintingTests is Test {
         _destinations[1] = address(_destVaultTwo);
 
         // Add the new destinations to the LMP Vault
-
         _accessController.grantRole(Roles.DESTINATION_VAULTS_UPDATER, address(this));
         _accessController.grantRole(Roles.SET_WITHDRAWAL_QUEUE_ROLE, address(this));
 
@@ -244,7 +286,6 @@ contract LMPVaultMintingTests is Test {
         // _asset - 1:1 ETH
         // _underlyer1 - 1:2 ETH
         // _underlyer2 - 1:1 ETH
-
         _rootPriceOracle = IRootPriceOracle(vm.addr(34_399));
         vm.label(address(_rootPriceOracle), "rootPriceOracle");
 
@@ -1961,6 +2002,470 @@ contract LMPVaultMintingTests is Test {
         dvs[0] = dv;
 
         _lmpVault.addDestinations(dvs);
+    }
+
+    function test_nextManagementFeeTake_SetOnInitialization() public {
+        assertGt(_lmpVault.nextManagementFeeTake(), 0);
+    }
+
+    // Testing that `managementFee` gets set outside of 45 day window before fee take.
+    function test_setManagementFeeBps_SetsFee_OutsideOfFeeTakeBuffer() public {
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSet(500);
+
+        // When not forked block.timestamp == 1, need to adjust to avoid underflow.
+        vm.warp(_lmpVault.nextManagementFeeTake() - 46 days);
+
+        _lmpVault.setManagementFeeBps(500);
+
+        assertEq(_lmpVault.managementFeeBps(), 500);
+    }
+
+    /**
+     * This test tests that in the situation that `managementFeeBps == 0` and
+     *      `pendingManagementFeeBps > 0` that the pending management fee can
+     *      become the management fee.  This was a bug in the original implementation
+     *      of management fees, we could have gotten stuck in a state where
+     *      the management fee could not be set.
+     */
+    function test_ManagementFeeCanBeReplaced_WhenOnlyPendingSet() public {
+        // Set roles
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Set sink
+        _lmpVault.setManagementFeeSink(makeAddr("FEE_SINK"));
+
+        // Vault deposit, needed so that `_collectFees()` doesn't return on no supply.
+        _asset.mint(address(this), 10);
+        _asset.approve(address(_lmpVault), 10);
+        _lmpVault.deposit(10, address(this));
+
+        // Warp time so that pending is set.
+        vm.warp(block.timestamp + _lmpVault.nextManagementFeeTake());
+
+        // Set pending.
+        _lmpVault.setManagementFeeBps(1000);
+
+        assertEq(_lmpVault.managementFeeBps(), 0);
+        assertEq(_lmpVault.pendingManagementFeeBps(), 1000);
+
+        /**
+         * Trigger `_collectFees()` through `updateDebtReporting`.  No management fee is set, so nothing
+         *      will be collected. However, a pending fee is set which will replace the management fee of 0.
+         */
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSet(1000);
+        vm.expectEmit(false, false, false, true);
+        emit PendingManagementFeeSet(0);
+
+        address[] memory destinations = new address[](0);
+        _lmpVault.updateDebtReporting(destinations);
+
+        assertEq(_lmpVault.managementFeeBps(), 1000);
+        assertEq(_lmpVault.pendingManagementFeeBps(), 0);
+    }
+
+    function test_NoUpdatesTo_nextManagementFeeTake_WhenTimestampNotValid() public {
+        // Role setup.
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Snapshot fee take timestamp before debt reporting update,
+        uint256 nextManagementFeeTakeBefore = _lmpVault.nextManagementFeeTake();
+
+        // Make sure that management fee takes line up properly,
+        assertLt(nextManagementFeeTakeBefore, nextManagementFeeTakeBefore + _lmpVault.MANAGEMENT_FEE_TAKE_TIMEFRAME());
+
+        // Give vault some supply so `_collectFees()` runs.
+        _asset.mint(address(this), 1000);
+        _asset.approve(address(_lmpVault), 1000);
+        _lmpVault.deposit(1000, address(this));
+
+        // Update debt reporting.
+        address[] memory destinations = new address[](0);
+        _lmpVault.updateDebtReporting(destinations);
+
+        assertEq(_lmpVault.nextManagementFeeTake(), nextManagementFeeTakeBefore);
+    }
+
+    function test_nextManagementFeeTake_UpdatedWhen_TimestampIsValid() public {
+        // Role setup.
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Snapshot fee take timestamp before debt reporting update,
+        uint256 nextManagementFeeTakeBefore = _lmpVault.nextManagementFeeTake();
+        uint256 managementFeeTakeTimeframe = _lmpVault.MANAGEMENT_FEE_TAKE_TIMEFRAME();
+        uint256 expectedNextManagementFeeTake = nextManagementFeeTakeBefore + managementFeeTakeTimeframe;
+
+        // Give vault some supply so `_collectFees()` runs.
+        _asset.mint(address(this), 1000);
+        _asset.approve(address(_lmpVault), 1000);
+        _lmpVault.deposit(1000, address(this));
+
+        // Total supply snapshot to check that nothing else was minted post operation.
+        uint256 totalSupplyBefore = _lmpVault.totalSupply();
+
+        // Update timestamp to be > current `nextManagementFeeTake`.
+        vm.warp(nextManagementFeeTakeBefore + 1);
+
+        // Update debt reporting, check for event emitted.
+        address[] memory destinations = new address[](0);
+        vm.expectEmit(false, false, false, true);
+        emit NextManagementFeeTakeSet(expectedNextManagementFeeTake);
+        _lmpVault.updateDebtReporting(destinations);
+
+        // Check updated `nextManagementFeeTake` against expected.
+        assertEq(_lmpVault.nextManagementFeeTake(), expectedNextManagementFeeTake);
+        // Check total supply to make sure nothing minted.
+        assertEq(_lmpVault.totalSupply(), totalSupplyBefore);
+    }
+
+    // Tests that management fee is collected correctly.
+    function test_ManagementFee_CollectedAsExpected_WhenTimestamp_Fee_AndSinkValid() public {
+        // Grant roles
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Local variables.
+        uint256 depositAmount = 3e20;
+        uint256 managementFeeBps = 500; // 5%
+        address feeSink = makeAddr("managementFeeSink");
+        uint256 expectedNextManagmentFeeTakeAfterOperation =
+            _lmpVault.nextManagementFeeTake() + _lmpVault.MANAGEMENT_FEE_TAKE_TIMEFRAME();
+
+        // Mint, approve, deposit to give supply.
+        _asset.mint(address(this), depositAmount);
+        _asset.approve(address(_lmpVault), depositAmount);
+        _lmpVault.deposit(depositAmount, address(this));
+
+        // Set fee and sink.
+        _lmpVault.setManagementFeeBps(managementFeeBps);
+        _lmpVault.setManagementFeeSink(feeSink);
+
+        // Warp block.timestamp to allow for fees to be taken.
+        vm.warp(block.timestamp + _lmpVault.MANAGEMENT_FEE_TAKE_TIMEFRAME() + 1);
+
+        // Get total shares before mint.
+        uint256 totalSupplyBefore = _lmpVault.totalSupply();
+
+        // Create destinations array.
+        address[] memory destinations = new address[](0);
+
+        // Calculate 'fees' amount for ManagementFeeCollected event.
+        uint256 expectedFees = _lmpVault.managementFeeBps() * _lmpVault.totalAssets() / _lmpVault.MAX_FEE_BPS();
+
+        // Externally calculated shares
+        uint256 calculatedShares = 15_789_473_684_210_526_316;
+
+        // Update debt, check events.
+        vm.expectEmit(true, true, false, true);
+        emit Deposit(address(_lmpVault), feeSink, 0, calculatedShares);
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeCollected(expectedFees, feeSink, calculatedShares);
+        vm.expectEmit(false, false, false, true);
+        emit NextManagementFeeTakeSet(expectedNextManagmentFeeTakeAfterOperation);
+        _lmpVault.updateDebtReporting(destinations);
+
+        /**
+         * Number of shares minted to feeSink address.  Can use this to check totalSupply because these are
+         *      the only shares that should have been minted.
+         */
+        uint256 minted = _lmpVault.balanceOf(feeSink);
+
+        // Check that correct numbers have been minted.
+        assertEq(minted, calculatedShares);
+        assertEq(totalSupplyBefore + minted, _lmpVault.totalSupply());
+        assertEq(_lmpVault.nextManagementFeeTake(), expectedNextManagmentFeeTakeAfterOperation);
+    }
+
+    function test_ProperFeeTake_StateUpdates_FeeTaken_AndPendingUpdated() public {
+        // Grant roles
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Local variables.
+        uint256 depositAmount = 3e20;
+        uint256 managementFeeBps = 500; // 5%
+        uint256 pendingManagementFeeBps = 750; // 7.5%
+        address feeSink = makeAddr("managementFeeSink");
+        uint256 expectedNextManagmentFeeTakeAfterOperation =
+            _lmpVault.nextManagementFeeTake() + _lmpVault.MANAGEMENT_FEE_TAKE_TIMEFRAME();
+
+        // Mint, approve, deposit to give supply.
+        _asset.mint(address(this), depositAmount);
+        _asset.approve(address(_lmpVault), depositAmount);
+        _lmpVault.deposit(depositAmount, address(this));
+
+        // Set fee and sink.
+        _lmpVault.setManagementFeeBps(managementFeeBps);
+        _lmpVault.setManagementFeeSink(feeSink);
+
+        // Checks for fee and sink
+        assertEq(_lmpVault.managementFeeBps(), managementFeeBps);
+        assertEq(_lmpVault.managementFeeSink(), feeSink);
+
+        // Set pending fee.  Includes warp.
+        vm.warp(expectedNextManagmentFeeTakeAfterOperation + 1);
+        vm.expectEmit(false, false, false, true);
+        emit PendingManagementFeeSet(pendingManagementFeeBps);
+        _lmpVault.setManagementFeeBps(pendingManagementFeeBps);
+
+        // Snapshot total supply.
+        uint256 totalSupplyBefore = _lmpVault.totalSupply();
+
+        // Calculate 'fees' amount for ManagementFeeCollected event.
+        uint256 expectedFees = _lmpVault.managementFeeBps() * _lmpVault.totalAssets() / _lmpVault.MAX_FEE_BPS();
+
+        // Externally calculated shares
+        uint256 calculatedShares = 15_789_473_684_210_526_316;
+
+        // Dest array.
+        address[] memory destinations = new address[](0);
+
+        // Update debt, check events.
+        vm.expectEmit(true, true, false, true);
+        emit Deposit(address(_lmpVault), feeSink, 0, calculatedShares);
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeCollected(expectedFees, feeSink, calculatedShares);
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSet(pendingManagementFeeBps);
+        vm.expectEmit(false, false, false, true);
+        emit PendingManagementFeeSet(0);
+        vm.expectEmit(false, false, false, true);
+        emit NextManagementFeeTakeSet(expectedNextManagmentFeeTakeAfterOperation);
+        _lmpVault.updateDebtReporting(destinations);
+
+        /**
+         * Number of shares minted to feeSink address.  Can use this to check totalSupply because these are
+         *      the only shares that should have been minted.
+         */
+        uint256 minted = _lmpVault.balanceOf(feeSink);
+
+        // Post operation checks.
+        assertEq(minted, calculatedShares);
+        assertEq(totalSupplyBefore + minted, _lmpVault.totalSupply());
+        assertEq(_lmpVault.nextManagementFeeTake(), expectedNextManagmentFeeTakeAfterOperation);
+        assertEq(_lmpVault.managementFeeBps(), pendingManagementFeeBps);
+        assertEq(_lmpVault.pendingManagementFeeBps(), 0);
+    }
+
+    function test_pendingManagementFeeBps_ReplacedProperlyWhen_NoFeeTaken() public {
+        // Grant roles
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Local vars.
+        uint256 pendingFee = 500; // 5%
+        uint256 depositAmount = 1000;
+        uint256 expectedNextManagementFeeTake =
+            _lmpVault.nextManagementFeeTake() + _lmpVault.MANAGEMENT_FEE_TAKE_TIMEFRAME();
+
+        // Mint, approve, deposit to give supply.
+        _asset.mint(address(this), depositAmount);
+        _asset.approve(address(_lmpVault), depositAmount);
+        _lmpVault.deposit(depositAmount, address(this));
+
+        // Warp timestamp to a time that will allow pending to be set.  Okay to warp to beyond next fee take time,
+        // will still set pending.
+        vm.warp(_lmpVault.nextManagementFeeTake() + 1);
+
+        // Set pending, ensure that it is set with event check.
+        vm.expectEmit(false, false, false, true);
+        emit PendingManagementFeeSet(pendingFee);
+        _lmpVault.setManagementFeeBps(pendingFee);
+
+        // Call updateDebtReporting to actually his _collectFees, check events emitted, etc.
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSet(pendingFee);
+        vm.expectEmit(false, false, false, true);
+        emit PendingManagementFeeSet(0);
+        vm.expectEmit(false, false, false, true);
+        emit NextManagementFeeTakeSet(expectedNextManagementFeeTake);
+        address[] memory destinations = new address[](0);
+        _lmpVault.updateDebtReporting(destinations);
+
+        // Post operation checks.
+        assertEq(_lmpVault.managementFeeBps(), pendingFee);
+        assertEq(_lmpVault.pendingManagementFeeBps(), 0);
+        assertEq(_lmpVault.nextManagementFeeTake(), expectedNextManagementFeeTake);
+    }
+
+    function test_ManagementFee_NotTaken_WhenRequirementsNotMet() public {
+        // Setup roles.
+        _accessController.setupRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        _accessController.setupRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+
+        // Fee sink address.
+        address managementFeeSink = makeAddr("managementFeeSink");
+
+        // Deposit amount.
+        uint256 depositAmount = 1000;
+
+        // Mint some asset, approve lmp, deposit.
+        _asset.mint(address(this), depositAmount);
+        _asset.approve(address(_lmpVault), depositAmount);
+        _lmpVault.deposit(depositAmount, address(this));
+
+        // Running two different scenarios, will revert to this to reset lmp state partially.
+        uint256 snapshot = vm.snapshot();
+
+        /**
+         * First check, make sure that fees are not taken when time is not appropriate.
+         * Set fee sink, management fee, make sure management fee is set and not pending.
+         * Then update debt, make sure fees not sent to sink.
+         */
+
+        // Checks both that management fees will not be collected and that mananagement fee can be set.
+        assertLt(block.timestamp, _lmpVault.nextManagementFeeTake() - 45 days);
+
+        // Set fee.
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSet(depositAmount);
+        _lmpVault.setManagementFeeBps(depositAmount); // Set 10% fee.
+
+        // Set sink.
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSinkSet(managementFeeSink);
+        _lmpVault.setManagementFeeSink(managementFeeSink);
+
+        // Call updateDebtReporting to trigger fee collection.
+        address[] memory destinations = new address[](0);
+        _lmpVault.updateDebtReporting(destinations);
+
+        // Check that no shares minted or moved.
+        assertEq(_lmpVault.totalSupply(), depositAmount);
+        assertEq(_lmpVault.balanceOf(managementFeeSink), 0);
+
+        // Reset for next scenario.
+        vm.revertTo(snapshot);
+
+        /**
+         * Second check, make sure fees are not taken when sink address is 0.
+         */
+
+        // Make sure management fee can be set.
+        assertLt(block.timestamp, _lmpVault.nextManagementFeeTake() - 45 days);
+
+        // Set management fee.
+        vm.expectEmit(false, false, false, true);
+        emit ManagementFeeSet(depositAmount);
+        _lmpVault.setManagementFeeBps(depositAmount); // 10%
+
+        // Roll block.timestamp to be valid for fee taking.
+        vm.warp(block.timestamp + 200 days);
+        assertGt(block.timestamp, _lmpVault.nextManagementFeeTake());
+
+        // Make sure fee sink address is 0;
+        assertEq(_lmpVault.managementFeeSink(), address(0));
+
+        // Make sure no shares minted.
+        assertEq(_lmpVault.totalSupply(), depositAmount);
+        assertEq(_lmpVault.balanceOf(address(0)), 0);
+    }
+
+    function test_ManagmentAndPerformanceFee_TakenTogether_Correctly() public {
+        // Local vars.
+        uint256 depositAmount = 1000;
+        uint256 feeBps = 1000;
+        address solver = makeAddr("solver");
+        address performanceFeeSink = makeAddr("performance");
+        address managementFeeSink = makeAddr("management");
+
+        // Access control setup.
+        _accessController.grantRole(Roles.LMP_FEE_SETTER_ROLE, address(this));
+        _accessController.grantRole(Roles.LMP_UPDATE_DEBT_REPORTING_ROLE, address(this));
+        _accessController.grantRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE, address(this));
+        _accessController.grantRole(Roles.SOLVER_ROLE, solver);
+
+        // Deploy flash rebalancer.
+        FlashRebalancer rebalancer = new FlashRebalancer();
+
+        // Fee setup. Will not affect anything for the first rebalance, as block.timestamp is too soon
+        // for management fee, and NAV will not increase with how test is set up.
+        _lmpVault.setPerformanceFeeBps(feeBps); // 10%
+        _lmpVault.setFeeSink(performanceFeeSink);
+        _lmpVault.setManagementFeeBps(feeBps); // 10%
+        _lmpVault.setManagementFeeSink(managementFeeSink);
+
+        // Make sure fee setup went correctly.
+        assertEq(_lmpVault.performanceFeeBps(), feeBps);
+        assertEq(_lmpVault.feeSink(), performanceFeeSink);
+        assertEq(_lmpVault.managementFeeBps(), feeBps);
+        assertEq(_lmpVault.pendingManagementFeeBps(), 0);
+        assertEq(_lmpVault.managementFeeSink(), managementFeeSink);
+
+        // LMP deposit.
+        _asset.mint(address(this), depositAmount);
+        _asset.approve(address(_lmpVault), depositAmount);
+        _lmpVault.deposit(depositAmount, address(this));
+
+        // Mint 1k underlyer to solver.
+        _underlyerOne.mint(solver, depositAmount);
+
+        // Prank solver, approve.
+        vm.startPrank(solver);
+        _underlyerOne.approve(address(_lmpVault), depositAmount);
+
+        // Snapshot assets for flash rebalance
+        rebalancer.snapshotAsset(address(_asset), depositAmount);
+
+        // Set price of first underlyer to 1 Eth, will manipulate later.
+        _mockRootPrice(address(_underlyerOne), 1e18);
+
+        _lmpVault.flashRebalance(
+            rebalancer,
+            IStrategy.RebalanceParams({
+                destinationIn: address(_destVaultOne),
+                tokenIn: address(_underlyerOne), // Token to DV1.
+                amountIn: depositAmount, // 1000 of token to DV1.
+                destinationOut: address(0), // Base asset, no destination needed.
+                tokenOut: address(_asset), // base asset.
+                amountOut: depositAmount // 1000 out.
+             }),
+            abi.encode("")
+        );
+        vm.stopPrank();
+
+        // Post rebalance checks.
+        assertEq(_underlyerOne.balanceOf(address(_destVaultOne)), depositAmount);
+        assertEq(_destVaultOne.balanceOf(address(_lmpVault)), depositAmount);
+        assertEq(_lmpVault.totalDebt(), depositAmount);
+        assertEq(_lmpVault.navPerShareHighMark(), 10_000); // Should not be changed from initial yet.
+
+        // Warp timestamp so management fees will be taken.
+        vm.warp(_lmpVault.nextManagementFeeTake() + 1);
+
+        // Up price of underlyer to 2 Eth.
+        _mockRootPrice(address(_underlyerOne), 2e18);
+
+        /**
+         * Update debt reporting, this will update Nav now that price of U1 has increased.
+         *
+         * Nav is 1.80 before performance fees are taken, up from 1.
+         *
+         * Profit is 1468.
+         *
+         * We expect the management fee to be pulled first, 10% of total assets accounting for total supply not being
+         *      manipulated.  Should be 112 shares minted to the `managementFeeSink` address.
+         *
+         * We expect the performance fee to be 89 shares. This value should account for the new totalSupply taking
+         *      into account the shares minted by a management fee claim, so a total supply of 1112 after
+         *      the management fee is taken.
+         *
+         * Total supply of shares after all operations are complete should be 1201.
+         *
+         * Nav per share high mark should be 16652 after all operations.
+         */
+        address[] memory destinations = new address[](1);
+        destinations[0] = address(_destVaultOne);
+        _lmpVault.updateDebtReporting(destinations);
+
+        // Check what vault did matches calculations.
+        assertEq(_lmpVault.balanceOf(managementFeeSink), 112);
+        assertEq(_lmpVault.balanceOf(performanceFeeSink), 89);
+        assertEq(_lmpVault.totalSupply(), 1201);
+        assertEq(_lmpVault.navPerShareHighMark(), 16_652);
     }
 
     function _mockSystemBound(address registry, address addr) internal {

@@ -4,7 +4,7 @@ pragma solidity 0.8.17;
 
 import { IERC20Metadata } from "openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-interface IGPToke {
+interface IAccToke {
     ///////////////////////////////////////////////////////////////////
     //                        Variables
     ///////////////////////////////////////////////////////////////////
@@ -39,6 +39,8 @@ interface IGPToke {
     error TransferFailed();
     error NoRewardsToClaim();
     error InsufficientAmount();
+    error InvalidLockupIds();
+    error InvalidDurationLength();
 
     ///////////////////////////////////////////////////////////////////
     //                        Events
@@ -91,10 +93,10 @@ interface IGPToke {
     function stake(uint256 amount, uint256 duration) external;
 
     /**
-     * @notice Collect staked OGV for a lockup and any earned rewards.
-     * @param lockupId the id of the lockup to unstake
+     * @notice Collect staked TOKE for a lockup and any earned rewards.
+     * @param lockupIds the id of the lockup to unstake
      */
-    function unstake(uint256 lockupId) external;
+    function unstake(uint256[] memory lockupIds) external;
 
     /**
      * @notice Extend a stake lockup for additional points.
@@ -105,10 +107,10 @@ interface IGPToke {
      * If an extend is made before the start of staking, the start time for the new stake is shifted forwards to the
      * start of staking, which also shifts forward the end date.
      *
-     * @param lockupId the id of the old lockup to extend
-     * @param duration number of seconds from now to stake for
+     * @param lockupIds the id of the old lockup to extend
+     * @param durations number of seconds from now to stake for
      */
-    function extend(uint256 lockupId, uint256 duration) external;
+    function extend(uint256[] memory lockupIds, uint256[] memory durations) external;
 
     ///////////////////////////////////////////////////////////////////
     //

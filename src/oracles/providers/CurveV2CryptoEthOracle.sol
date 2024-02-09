@@ -16,8 +16,10 @@ import { ICryptoSwapPool } from "src/interfaces/external/curve/ICryptoSwapPool.s
 import { ICurveV2Swap } from "src/interfaces/external/curve/ICurveV2Swap.sol";
 
 contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, ISpotPriceOracle {
-    ICurveResolver public immutable curveResolver;
     uint256 public constant FEE_PRECISION = 1e10;
+    address public constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+
+    ICurveResolver public immutable curveResolver;
 
     /**
      * @notice Struct for neccessary information for single Curve pool.
@@ -125,8 +127,7 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
 
         /**
          * Curve V2 pools always price second token in `coins` array in first token in `coins` array.  This means that
-         *    if `coins[0]` is Weth, and `coins[1]` is rEth, the price will be rEth as base and weth as quote.  Hence
-         *    to get lp price we will always want to use the second token in the array, priced in eth.
+         *    if `coins[0]` is Weth, and `coins[1]` is rEth, the price will be rEth as base and weth as quote.
          */
         lpTokenToPool[lpToken] = PoolData({
             pool: curvePool,
@@ -160,6 +161,8 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         if (poolInfo.pool == address(0)) revert NotRegistered(token);
 
         ICryptoSwapPool cryptoPool = ICryptoSwapPool(poolInfo.pool);
+        address base = poolInfo.tokenToPrice;
+        address quote = poolInfo.tokenFromPrice;
 
         // Checking for read only reentrancy scenario.
         if (poolInfo.checkReentrancy == 1) {
@@ -168,9 +171,11 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         }
 
         uint256 virtualPrice = cryptoPool.get_virtual_price();
-        uint256 assetPrice = systemRegistry.rootPriceOracle().getPriceInEth(poolInfo.tokenToPrice);
+        // `getPriceInQuote` works for both eth pegged and non eth pegged assets.
+        uint256 basePrice = systemRegistry.rootPriceOracle().getPriceInQuote(base, quote);
+        uint256 ethInQuote = systemRegistry.rootPriceOracle().getPriceInQuote(ETH, quote);
 
-        return (2 * virtualPrice * sqrt(assetPrice)) / 10 ** 18;
+        return (2 * virtualPrice * sqrt(basePrice)) / ethInQuote;
     }
 
     // solhint-disable max-line-length

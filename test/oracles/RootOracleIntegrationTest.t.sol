@@ -70,12 +70,24 @@ import {
     CRV_CL_FEED_MAINNET,
     LDO_CL_FEED_MAINNET,
     CRV_MAINNET,
-    LDO_MAINNET
+    LDO_MAINNET,
+    STG_MAINNET,
+    STG_CL_FEED_MAINNET,
+    STG_USDC_CURVE_V2_LP,
+    STG_USDC_V2_POOL,
+    BADGER_MAINNET,
+    WBTC_MAINNET,
+    BADGER_CL_FEED_MAINNET,
+    BTC_CL_FEED_MAINNET,
+    WBTC_BADGER_CURVE_V2_LP,
+    WBTC_BADGER_V2_POOL,
+    FRXETH_MAINNET,
+    MAV_POOL_INFORMATION
 } from "../utils/Addresses.sol";
 
 import { SystemRegistry } from "src/SystemRegistry.sol";
 import { RootPriceOracle, IPriceOracle } from "src/oracles/RootPriceOracle.sol";
-import { AccessController } from "src/security/AccessController.sol";
+import { AccessController, Roles } from "src/security/AccessController.sol";
 import { BalancerLPComposableStableEthOracle } from "src/oracles/providers/BalancerLPComposableStableEthOracle.sol";
 import { BalancerLPMetaStableEthOracle } from "src/oracles/providers/BalancerLPMetaStableEthOracle.sol";
 import { ChainlinkOracle } from "src/oracles/providers/ChainlinkOracle.sol";
@@ -86,6 +98,7 @@ import { WstETHEthOracle } from "src/oracles/providers/WstETHEthOracle.sol";
 import { MavEthOracle } from "src/oracles/providers/MavEthOracle.sol";
 import { CurveV2CryptoEthOracle } from "src/oracles/providers/CurveV2CryptoEthOracle.sol";
 import { BaseOracleDenominations } from "src/oracles/providers/base/BaseOracleDenominations.sol";
+import { CustomSetOracle } from "src/oracles/providers/CustomSetOracle.sol";
 import { CrvUsdOracle } from "test/mocks/CrvUsdOracle.sol";
 
 import { IVault as IBalancerVault } from "src/interfaces/external/balancer/IVault.sol";
@@ -107,6 +120,8 @@ import { IAggregatorV3Interface } from "src/interfaces/external/chainlink/IAggre
  *            the safe price contract.
  */
 contract RootOracleIntegrationTest is Test {
+    address public constant ETH_IN_USD = address(bytes20("ETH_IN_USD"));
+
     SystemRegistry public systemRegistry;
     RootPriceOracle public priceOracle;
     AccessController public accessControl;
@@ -121,6 +136,7 @@ contract RootOracleIntegrationTest is Test {
     WstETHEthOracle public wstEthOracle;
     MavEthOracle public mavEthOracle;
     CurveV2CryptoEthOracle public curveCryptoOracle;
+    CustomSetOracle public customSetOracle;
     CrvUsdOracle public crvUsdOracle;
 
     function setUp() external {
@@ -144,13 +160,14 @@ contract RootOracleIntegrationTest is Test {
         ethPegOracle = new EthPeggedOracle(systemRegistry);
         uniV2EthOracle = new UniswapV2EthOracle(systemRegistry);
         wstEthOracle = new WstETHEthOracle(systemRegistry, WSTETH_MAINNET);
-        mavEthOracle = new MavEthOracle(systemRegistry);
+        mavEthOracle = new MavEthOracle(systemRegistry, MAV_POOL_INFORMATION);
         curveCryptoOracle = new CurveV2CryptoEthOracle(systemRegistry, ICurveResolver(curveResolver));
+        customSetOracle = new CustomSetOracle(systemRegistry, 52 weeks); // Max age doesn't matter for testing.
         crvUsdOracle = new CrvUsdOracle(
-          systemRegistry,
-          IAggregatorV3Interface(USDC_IN_USD_CL_FEED_MAINNET),
-          IAggregatorV3Interface(USDT_IN_USD_CL_FEED_MAINNET),
-          IAggregatorV3Interface(ETH_CL_FEED_MAINNET)
+            systemRegistry,
+            IAggregatorV3Interface(USDC_IN_USD_CL_FEED_MAINNET),
+            IAggregatorV3Interface(USDT_IN_USD_CL_FEED_MAINNET),
+            IAggregatorV3Interface(ETH_CL_FEED_MAINNET)
         );
 
         //
@@ -169,6 +186,7 @@ contract RootOracleIntegrationTest is Test {
         vm.makePersistent(address(wstEthOracle));
         vm.makePersistent(address(mavEthOracle));
         vm.makePersistent(address(curveCryptoOracle));
+        vm.makePersistent(address(customSetOracle));
         vm.makePersistent(address(crvUsdOracle));
 
         //
@@ -187,6 +205,10 @@ contract RootOracleIntegrationTest is Test {
         priceOracle.registerMapping(CRVUSD_MAINNET, IPriceOracle(address(crvUsdOracle)));
         priceOracle.registerMapping(CRV_MAINNET, IPriceOracle(address(chainlinkOracle)));
         priceOracle.registerMapping(LDO_MAINNET, IPriceOracle(address(chainlinkOracle)));
+        priceOracle.registerMapping(STG_MAINNET, IPriceOracle(address(chainlinkOracle)));
+        priceOracle.registerMapping(BADGER_MAINNET, IPriceOracle(address(chainlinkOracle)));
+        priceOracle.registerMapping(WBTC_MAINNET, IPriceOracle(address(chainlinkOracle)));
+        priceOracle.registerMapping(ETH_IN_USD, IPriceOracle(address(chainlinkOracle)));
 
         // Balancer composable stable pool
         priceOracle.registerMapping(USDC_DAI_USDT_BAL_POOL, IPriceOracle(address(balancerComposableOracle)));
@@ -212,6 +234,8 @@ contract RootOracleIntegrationTest is Test {
         priceOracle.registerMapping(RETH_ETH_CURVE_LP, IPriceOracle(address(curveCryptoOracle)));
         priceOracle.registerMapping(CRV_ETH_CURVE_V2_LP, IPriceOracle(address(curveCryptoOracle)));
         priceOracle.registerMapping(LDO_ETH_CURVE_V2_LP, IPriceOracle(address(curveCryptoOracle)));
+        priceOracle.registerMapping(STG_USDC_CURVE_V2_LP, IPriceOracle(address(curveCryptoOracle)));
+        priceOracle.registerMapping(WBTC_BADGER_CURVE_V2_LP, IPriceOracle(address(curveCryptoOracle)));
 
         // UniV2
         priceOracle.registerMapping(STETH_ETH_UNIV2, IPriceOracle(address(uniV2EthOracle)));
@@ -226,6 +250,9 @@ contract RootOracleIntegrationTest is Test {
 
         // Lst special pricing case setup
         priceOracle.registerMapping(WSTETH_MAINNET, IPriceOracle(address(wstEthOracle)));
+
+        // Custom oracle
+        priceOracle.registerMapping(FRXETH_MAINNET, IPriceOracle(address(customSetOracle)));
 
         // Chainlink setup
         chainlinkOracle.registerChainlinkOracle(
@@ -291,6 +318,21 @@ contract RootOracleIntegrationTest is Test {
         chainlinkOracle.registerChainlinkOracle(
             LDO_MAINNET, IAggregatorV3Interface(LDO_CL_FEED_MAINNET), BaseOracleDenominations.Denomination.ETH, 24 hours
         );
+        chainlinkOracle.registerChainlinkOracle(
+            BADGER_MAINNET,
+            IAggregatorV3Interface(BADGER_CL_FEED_MAINNET),
+            BaseOracleDenominations.Denomination.ETH,
+            2 hours
+        );
+        chainlinkOracle.registerChainlinkOracle(
+            WBTC_MAINNET,
+            IAggregatorV3Interface(BTC_CL_FEED_MAINNET),
+            BaseOracleDenominations.Denomination.ETH,
+            24 hours
+        );
+        chainlinkOracle.registerChainlinkOracle(
+            ETH_IN_USD, IAggregatorV3Interface(ETH_CL_FEED_MAINNET), BaseOracleDenominations.Denomination.USD, 0
+        );
 
         // Curve V1 pool setup
         curveStableOracle.registerPool(STETH_ETH_CURVE_POOL, ST_ETH_CURVE_LP_TOKEN_MAINNET, true);
@@ -307,10 +349,22 @@ contract RootOracleIntegrationTest is Test {
         curveCryptoOracle.registerPool(RETH_WETH_CURVE_POOL, RETH_ETH_CURVE_LP, false);
         curveCryptoOracle.registerPool(CRV_ETH_CURVE_V2_POOL, CRV_ETH_CURVE_V2_LP, false);
         curveCryptoOracle.registerPool(LDO_ETH_CURVE_V2_POOL, LDO_ETH_CURVE_V2_LP, false);
+        curveCryptoOracle.registerPool(STG_USDC_V2_POOL, STG_USDC_CURVE_V2_LP, false);
+        curveCryptoOracle.registerPool(WBTC_BADGER_V2_POOL, WBTC_BADGER_CURVE_V2_LP, false);
 
         // Uni pool setup
         uniV2EthOracle.register(STETH_ETH_UNIV2);
         uniV2EthOracle.register(ETH_USDT_UNIV2);
+
+        // Custom oracle setup
+        address[] memory tokens = new address[](1);
+        uint256[] memory maxAges = new uint256[](1);
+        tokens[0] = FRXETH_MAINNET;
+        maxAges[0] = 50 weeks;
+
+        accessControl.setupRole(Roles.ORACLE_MANAGER_ROLE, address(this));
+
+        customSetOracle.registerTokens(tokens, maxAges);
     }
 
     //
@@ -518,13 +572,47 @@ contract RootOracleIntegrationTest is Test {
         (upperBound, lowerBound) = _getTwoPercentTolerance(calculatedPrice);
         assertGt(upperBound, safePrice);
         assertLt(lowerBound, safePrice);
+
+        //
+        // Non-eth base tests.
+        //
+        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"), 17_914_103);
+        // Set up here, does not exist at block forked for `setUp()`.
+        chainlinkOracle.registerChainlinkOracle(
+            STG_MAINNET, IAggregatorV3Interface(STG_CL_FEED_MAINNET), BaseOracleDenominations.Denomination.USD, 24 hours
+        );
+
+        address[] memory tokens = new address[](1);
+        uint256[] memory prices = new uint256[](1);
+        uint256[] memory timestamps = new uint256[](1);
+
+        // Set frxEth pricing with custom set oracle, price in Eth taken from Coingecko.
+        tokens[0] = FRXETH_MAINNET;
+        prices[0] = 998_126_960_000_000_000;
+        timestamps[0] = block.timestamp;
+        customSetOracle.setPrices(tokens, prices, timestamps);
+
+        // Safe price - 892992560872301
+        // Calculated - 898924164000000
+        calculatedPrice = uint256(898_924_164_000_000);
+        safePrice = priceOracle.getPriceInEth(STG_USDC_CURVE_V2_LP);
+        (upperBound, lowerBound) = _getTwoPercentTolerance(calculatedPrice);
+        assertGt(upperBound, safePrice);
+        assertLt(lowerBound, safePrice);
+
+        // Safe price - 284617745946998885
+        // Calculated - 280364973000000000
+        calculatedPrice = uint256(280_364_973_000_000_000);
+        safePrice = priceOracle.getPriceInEth(WBTC_BADGER_CURVE_V2_LP);
+        (upperBound, lowerBound) = _getTwoPercentTolerance(calculatedPrice);
+        assertGt(upperBound, safePrice);
+        assertLt(lowerBound, safePrice);
     }
 
     // Specifically test path when asset is priced in USD
     function test_EthInUsdPath() external {
         // Use bal usdc - usdt - dai pool, usdc denominated in USD
 
-        address ETH_IN_USD = address(bytes20("ETH_IN_USD"));
         vm.createSelectFork(vm.envString("MAINNET_RPC_URL"), 17_475_310);
 
         chainlinkOracle.removeChainlinkRegistration(USDC_MAINNET);
@@ -534,16 +622,35 @@ contract RootOracleIntegrationTest is Test {
             BaseOracleDenominations.Denomination.USD,
             24 hours
         );
-        priceOracle.registerMapping(ETH_IN_USD, IPriceOracle(address(chainlinkOracle)));
-        chainlinkOracle.registerChainlinkOracle(
-            ETH_IN_USD, IAggregatorV3Interface(ETH_CL_FEED_MAINNET), BaseOracleDenominations.Denomination.USD, 0
-        );
 
         // calculated - 588167942000000
         // safe price - 587583813652788
         uint256 calculatedPrice = uint256(588_167_942_000_000);
         uint256 safePrice = priceOracle.getPriceInEth(THREE_CURVE_POOL_MAINNET_LP);
         (uint256 upperBound, uint256 lowerBound) = _getTwoPercentTolerance(calculatedPrice);
+        assertGt(upperBound, safePrice);
+        assertLt(lowerBound, safePrice);
+    }
+
+    // Test `getPriceInQuote()` individually.
+    function test_GetPriceInQuote() external {
+        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"), 18_021_563);
+
+        // stEth in usdc
+        // calculated - 1724550123000000000000
+        // safe price - 1736857822983362723964
+        uint256 calculatedPrice = uint256(1_724_550_123_000_000_000_000);
+        uint256 safePrice = priceOracle.getPriceInQuote(STETH_MAINNET, USDC_MAINNET);
+        (uint256 upperBound, uint256 lowerBound) = _getTwoPercentTolerance(calculatedPrice);
+        assertGt(upperBound, safePrice);
+        assertLt(lowerBound, safePrice);
+
+        // usdt in crv
+        // calculated - 2032995638000000000
+        // safe price - 2017150178107977497
+        calculatedPrice = uint256(2_032_995_638_000_000_000);
+        safePrice = priceOracle.getPriceInQuote(USDT_MAINNET, CRV_MAINNET);
+        (upperBound, lowerBound) = _getTwoPercentTolerance(calculatedPrice);
         assertGt(upperBound, safePrice);
         assertLt(lowerBound, safePrice);
     }

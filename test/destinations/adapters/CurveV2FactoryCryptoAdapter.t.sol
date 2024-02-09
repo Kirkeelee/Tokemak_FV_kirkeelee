@@ -44,7 +44,7 @@ contract CurveV2FactoryCryptoAdapterTest is Test {
     }
 
     function setUp() public {
-        mainnetFork = vm.createFork(vm.envString("MAINNET_RPC_URL"));
+        mainnetFork = vm.createFork(vm.envString("MAINNET_RPC_URL"), 17_000_000);
         vm.selectFork(mainnetFork);
         assertEq(vm.activeFork(), mainnetFork);
 

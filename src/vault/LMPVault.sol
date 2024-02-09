@@ -65,6 +65,15 @@ contract LMPVault is
 
     uint256 public constant NAV_CHANGE_ROUNDING_BUFFER = 100;
 
+    /// @notice Max management fee, 10%.  100% = 10_000.
+    uint256 public constant MAX_MANAGEMENT_FEE_BPS = 1000;
+
+    /// @notice Time between management fee takes.  ~ half year.
+    uint256 public constant MANAGEMENT_FEE_TAKE_TIMEFRAME = 182 days;
+
+    /// @notice Time before a management fee is taken that the fee % can be changed.
+    uint256 public constant MANAGEMENT_FEE_CHANGE_CUTOFF = 45 days;
+
     /// @notice Factory contract that created this vault
     address public factory;
 
@@ -136,6 +145,18 @@ contract LMPVault is
     string private _desc;
     string private _symbol;
 
+    /// @notice Address that receives management fee.
+    address public managementFeeSink;
+
+    /// @notice Timestamp of next management fee to be taken.
+    uint48 public nextManagementFeeTake;
+
+    /// @notice Current management fee.  100% == 10_000.
+    uint16 public managementFeeBps;
+
+    /// @notice Pending management fee.  Used as placeholder for new `managementFeeBps` within range of fee take.
+    uint16 public pendingManagementFeeBps;
+
     error TooFewAssets(uint256 requested, uint256 actual);
     error WithdrawShareCalcInvalid(uint256 currentShares, uint256 cachedShares);
     error InvalidFee(uint256 newFee);
@@ -156,6 +177,10 @@ contract LMPVault is
     event TotalSupplyLimitSet(uint256 limit);
     event PerWalletLimitSet(uint256 limit);
     event SymbolAndDescSet(string symbol, string desc);
+    event ManagementFeeSet(uint256 newFee);
+    event PendingManagementFeeSet(uint256 pendingManagementFeeBps);
+    event ManagementFeeSinkSet(address newManagementFeeSink);
+    event NextManagementFeeTakeSet(uint256 nextManagementFeeTake);
 
     struct ExtraData {
         address lmpStrategyAddress;
@@ -230,6 +255,8 @@ contract LMPVault is
 
         _symbol = string(abi.encodePacked("lmp", symbolSuffix));
         _desc = string(abi.encodePacked(descPrefix, " Pool Token"));
+        nextManagementFeeTake = uint48(block.timestamp + MANAGEMENT_FEE_TAKE_TIMEFRAME);
+        emit NextManagementFeeTakeSet(nextManagementFeeTake);
 
         ExtraData memory decodedInitData = abi.decode(extraData, (ExtraData));
         Errors.verifyNotZero(decodedInitData.lmpStrategyAddress, "lmpStrategyAddress");
@@ -295,6 +322,31 @@ contract LMPVault is
         emit PerformanceFeeSet(fee);
     }
 
+    /// @notice Set the management fee taken.
+    /// @dev Depending on time until next fee take, may update managementFeeBps directly or queue fee.
+    /// @param fee Fee to update management fee to.
+    function setManagementFeeBps(uint256 fee) external hasRole(Roles.LMP_MANAGEMENT_FEE_SETTER_ROLE) {
+        if (fee > MAX_MANAGEMENT_FEE_BPS) {
+            revert InvalidFee(fee);
+        }
+
+        /**
+         * If the current timestamp is greater than the next fee take minus 45 days, we are withing the timeframe
+         *      that we do not want to be able to set a new management fee, so we set `pendingManagementFeeBps` instead.
+         *      This will be set as `managementFeeBps` when management fees are taken.
+         *
+         * Fee checked to fit into uint16 above, able to be wrapped without safe cast here.
+         */
+        // slither-disable-next-line timestamp
+        if (block.timestamp > nextManagementFeeTake - MANAGEMENT_FEE_CHANGE_CUTOFF) {
+            emit PendingManagementFeeSet(fee);
+            pendingManagementFeeBps = uint16(fee);
+        } else {
+            emit ManagementFeeSet(fee);
+            managementFeeBps = uint16(fee);
+        }
+    }
+
     /// @notice Set the address that will receive fees
     /// @param newFeeSink Address that will receive fees
     function setFeeSink(address newFeeSink) external onlyOwner {
@@ -303,6 +355,16 @@ contract LMPVault is
         // Zero is valid. One way to disable taking fees
         // slither-disable-next-line missing-zero-check
         feeSink = newFeeSink;
+    }
+
+    /// @notice Sets the address that will receive management fees.
+    /// @dev Zero address allowable.  Disables fees.
+    /// @param newManagementFeeSink New managment fee address.
+    function setManagementFeeSink(address newManagementFeeSink) external onlyOwner {
+        emit ManagementFeeSinkSet(newManagementFeeSink);
+
+        // slither-disable-next-line missing-zero-check
+        managementFeeSink = newManagementFeeSink;
     }
 
     /// @notice Set the rewarder contract used by the vault
@@ -856,6 +918,7 @@ contract LMPVault is
         uint256 fees = 0;
         uint256 shares = 0;
         uint256 profit = 0;
+        uint256 timestamp = block.timestamp;
 
         // If there's no supply then there should be no assets and so nothing
         // to actually take fees on
@@ -871,6 +934,29 @@ contract LMPVault is
             totalAssetsHighMark = assets;
         }
 
+        // slither-disable-start timestamp
+        // If current timestamp is greater than nextManagementFeeTake, operations need to happen for management fee.
+        if (timestamp > nextManagementFeeTake) {
+            // If there is a management fee and fee sink set, take the fee.
+            if (managementFeeBps > 0 && managementFeeSink != address(0)) {
+                totalSupply = _collectManagementFees(totalSupply, assets);
+            }
+
+            // If there is a pending management fee set, replace management fee with pending after fees already taken.
+            if (pendingManagementFeeBps > 0) {
+                emit ManagementFeeSet(pendingManagementFeeBps);
+                emit PendingManagementFeeSet(0);
+
+                managementFeeBps = pendingManagementFeeBps;
+                pendingManagementFeeBps = 0;
+            }
+
+            // Needs to be updated any time timestamp > `nextTakeManagementFee` to keep up to date.
+            nextManagementFeeTake += uint48(MANAGEMENT_FEE_TAKE_TIMEFRAME);
+            emit NextManagementFeeTakeSet(nextManagementFeeTake);
+        }
+
+        // slither-disable-end timestamp
         uint256 currentNavPerShare = ((idle + debt) * MAX_FEE_BPS) / totalSupply;
         uint256 effectiveNavPerShareHighMark = _calculateEffectiveNavPerShareHighMark(
             block.timestamp,
@@ -900,13 +986,13 @@ contract LMPVault is
                 _mint(sink, shares);
                 totalSupply += shares;
                 currentNavPerShare = ((idle + debt) * MAX_FEE_BPS) / totalSupply;
-                emit Deposit(address(this), sink, fees, shares);
+                emit Deposit(address(this), sink, 0, shares);
             }
 
             // Set our new high water mark, the last nav/share height we took fees
             navPerShareHighMark = currentNavPerShare;
-            navPerShareHighMarkTimestamp = block.timestamp;
-            emit NewNavHighWatermark(currentNavPerShare, block.timestamp);
+            navPerShareHighMarkTimestamp = timestamp;
+            emit NewNavHighWatermark(currentNavPerShare, timestamp);
         }
         // Set our new high water mark for totalAssets, regardless if we took fees
         if (totalAssetsHighMark < assets) {
@@ -958,17 +1044,38 @@ contract LMPVault is
             uint256 gamma = g1 + g2;
 
             uint256 daysDiff = daysSinceLastFeeEarned - 60;
-            // slither-disable-start divide-before-multiply
             for (uint256 i = 0; i < daysDiff / 25; ++i) {
+                // slither-disable-next-line divide-before-multiply
                 workingHigh = workingHigh * (gamma ** 25 / 1e72) / 1000;
             }
             // slither-disable-next-line weak-prng
             for (uint256 i = 0; i < daysDiff % 25; ++i) {
+                // slither-disable-next-line divide-before-multiply
                 workingHigh = workingHigh * gamma / 1000;
             }
-            // slither-disable-end divide-before-multiply
         }
         return workingHigh;
+    }
+
+    /// @dev Collects management fees.
+    function _collectManagementFees(uint256 totalSupply, uint256 assets) internal returns (uint256) {
+        // Management fee * assets used multiple places below, gas savings when calc here.
+        uint256 managementFeeMultAssets = managementFeeBps * assets;
+        address managementSink = managementFeeSink;
+
+        // We calculate the shares using the same formula as performance fees, without scaling down
+        uint256 shares = Math.mulDiv(
+            managementFeeMultAssets, totalSupply, (assets * MAX_FEE_BPS) - (managementFeeMultAssets), Math.Rounding.Up
+        );
+        _mint(managementSink, shares);
+        totalSupply += shares;
+
+        // Fee in assets that we are taking.
+        uint256 fees = managementFeeMultAssets.ceilDiv(MAX_FEE_BPS);
+        emit Deposit(address(this), managementSink, 0, shares);
+        emit ManagementFeeCollected(fees, managementSink, shares);
+
+        return totalSupply;
     }
 
     function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual override whenNotPaused {

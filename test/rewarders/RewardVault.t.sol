@@ -59,7 +59,7 @@ contract MainRewarderTest is BaseTest {
         accessController.grantRole(Roles.DV_REWARD_MANAGER_ROLE, operator);
         accessController.grantRole(Roles.LIQUIDATOR_ROLE, liquidator);
 
-        deployGpToke();
+        deployAccToke();
 
         stakeTracker = new StakeTrackingMock();
 
@@ -70,28 +70,17 @@ contract MainRewarderTest is BaseTest {
         );
 
         mainRewardVault = MainRewarder(
-            new DestinationVaultMainRewarder(systemRegistry,
-            address(stakeTracker),
-            address(mainReward),
-            newRewardRatio,
-            durationInBlock,
-            true)
+            new DestinationVaultMainRewarder(
+                systemRegistry, address(stakeTracker), address(mainReward), newRewardRatio, durationInBlock, true
+            )
         );
 
         extraReward1Vault = new ExtraRewarder(
-            systemRegistry,
-            address(extraReward1),
-            address(mainRewardVault),
-            newRewardRatio,
-            durationInBlock
+            systemRegistry, address(extraReward1), address(mainRewardVault), newRewardRatio, durationInBlock
         );
 
         extraReward2Vault = new ExtraRewarder(
-            systemRegistry,
-            address(extraReward2),
-            address(mainRewardVault),
-            newRewardRatio,
-            durationInBlock
+            systemRegistry, address(extraReward2), address(mainRewardVault), newRewardRatio, durationInBlock
         );
 
         mainReward.mint(liquidator, amount);
@@ -181,30 +170,19 @@ contract MainRewarderTest is BaseTest {
     function test_toke_getExtraRewards_WhenTokeRewardIsLessThanMinStake() public {
         // setup toke rewarder
         MainRewarder tokeRewarder = MainRewarder(
-            new DestinationVaultMainRewarder(systemRegistry,
-            address(stakeTracker),
-            address(toke),
-            newRewardRatio,
-            durationInBlock,
-            true)
+            new DestinationVaultMainRewarder(
+                systemRegistry, address(stakeTracker), address(toke), newRewardRatio, durationInBlock, true
+            )
         );
         vm.prank(address(operator));
         tokeRewarder.setTokeLockDuration(30 days);
 
         // and some extra rewarders
         extraReward1Vault = new ExtraRewarder(
-            systemRegistry,
-            address(extraReward1),
-            address(tokeRewarder),
-            newRewardRatio,
-            durationInBlock
+            systemRegistry, address(extraReward1), address(tokeRewarder), newRewardRatio, durationInBlock
         );
         extraReward2Vault = new ExtraRewarder(
-            systemRegistry,
-            address(extraReward2),
-            address(tokeRewarder),
-            newRewardRatio,
-            durationInBlock
+            systemRegistry, address(extraReward2), address(tokeRewarder), newRewardRatio, durationInBlock
         );
         vm.startPrank(operator);
         tokeRewarder.addExtraReward(address(extraReward1Vault));
@@ -242,7 +220,7 @@ contract MainRewarderTest is BaseTest {
 
         // record balances before
         uint256 tokeBalanceBefore = toke.balanceOf(RANDOM);
-        uint256 gpTokeBalanceBefore = gpToke.balanceOf(RANDOM);
+        uint256 accTokeBalanceBefore = accToke.balanceOf(RANDOM);
         uint256 extraReward1BalanceBefore = extraReward1.balanceOf(RANDOM);
         uint256 extraReward2BalanceBefore = extraReward2.balanceOf(RANDOM);
 
@@ -252,7 +230,7 @@ contract MainRewarderTest is BaseTest {
 
         // validate balances after – toke should be the same as before
         assertEq(toke.balanceOf(RANDOM), tokeBalanceBefore);
-        assertEq(gpToke.balanceOf(RANDOM), gpTokeBalanceBefore);
+        assertEq(accToke.balanceOf(RANDOM), accTokeBalanceBefore);
         // extra rewards should be claimed successfully
         assertTrue(extraReward1.balanceOf(RANDOM) > extraReward1BalanceBefore);
         assertTrue(extraReward2.balanceOf(RANDOM) > extraReward2BalanceBefore);
@@ -261,15 +239,12 @@ contract MainRewarderTest is BaseTest {
     function _runTokeStakingTest(
         uint256 stakeDuration,
         uint256 expectedTokeBalanceDiff,
-        bool gpTokeIncreaseExpected
+        bool accTokeIncreaseExpected
     ) private {
         MainRewarder tokeRewarder = MainRewarder(
-            new DestinationVaultMainRewarder(systemRegistry,
-            address(stakeTracker),
-            address(toke),
-            newRewardRatio,
-            durationInBlock,
-            true)
+            new DestinationVaultMainRewarder(
+                systemRegistry, address(stakeTracker), address(toke), newRewardRatio, durationInBlock, true
+            )
         );
 
         // set duration
@@ -294,7 +269,7 @@ contract MainRewarderTest is BaseTest {
         assertEq(earned, amount);
 
         uint256 tokeBalanceBefore = toke.balanceOf(RANDOM);
-        uint256 gpTokeBalanceBefore = gpToke.balanceOf(RANDOM);
+        uint256 accTokeBalanceBefore = accToke.balanceOf(RANDOM);
 
         // claim rewards
 
@@ -302,6 +277,6 @@ contract MainRewarderTest is BaseTest {
         tokeRewarder.getReward();
 
         assertEq(toke.balanceOf(RANDOM) - tokeBalanceBefore, expectedTokeBalanceDiff);
-        assertEq(gpToke.balanceOf(RANDOM) > gpTokeBalanceBefore, gpTokeIncreaseExpected);
+        assertEq(accToke.balanceOf(RANDOM) > accTokeBalanceBefore, accTokeIncreaseExpected);
     }
 }
