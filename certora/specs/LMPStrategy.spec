@@ -1,6 +1,7 @@
-import "./erc20.spec";
+import "./complexity.spec";
 
 use builtin rule sanity;
+use rule privilegedOperation;
 
 methods {
     function _.getPriceInEth(address token) external with (env e) => getPriceInEthCVL[token][e.block.timestamp] expect (uint256);
