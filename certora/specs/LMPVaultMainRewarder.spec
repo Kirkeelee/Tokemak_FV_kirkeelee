@@ -64,8 +64,8 @@ rule updateReward(address account) {
     setup();
     require account != 0;
     require currentContract.rewardPerTokenStored > 0;
-    requireInvariant rewardPerTokenGTUsers(account);
-    requireInvariant rewardPerTokenNonzero(account);
+    // requireInvariant rewardPerTokenGTUsers(account);
+    // requireInvariant rewardPerTokenNonzero(account);
 
     updateReward(account);
 
