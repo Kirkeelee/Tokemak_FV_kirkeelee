@@ -363,30 +363,20 @@ contract RootOracleIntegrationTest is Test {
         uniV2EthOracle.register(ETH_USDT_UNIV2);
 
         // Custom oracle setup
-<<<<<<< HEAD
-        address[] memory tokens = new address[](1);
-        uint256[] memory maxAges = new uint256[](1);
-        tokens[0] = FRXETH_MAINNET;
-        maxAges[0] = 50 weeks;
-=======
         address[] memory tokens = new address[](2);
         uint256[] memory maxAges = new uint256[](2);
         tokens[0] = FRXETH_MAINNET;
         tokens[1] = SFRXETH_MAINNET;
         maxAges[0] = 50 weeks;
         maxAges[1] = 50 weeks;
->>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
 
         accessControl.setupRole(Roles.ORACLE_MANAGER_ROLE, address(this));
 
         customSetOracle.registerTokens(tokens, maxAges);
-<<<<<<< HEAD
-=======
 
         // Set up for spot pricing used across multiple test contracts.  Rest can be found in individual contracts.
         priceOracle.registerPoolMapping(THREE_CURVE_MAINNET, curveStableOracle);
         priceOracle.registerPoolMapping(STETH_ETH_CURVE_POOL, curveStableOracle);
->>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
     }
 
     function _getTwoPercentTolerance(uint256 price) internal pure returns (uint256 upperBound, uint256 lowerBound) {
@@ -733,37 +723,9 @@ contract GetPriceInEth is RootOracleIntegrationTest {
     }
 }
 
-<<<<<<< HEAD
-    // Test `getPriceInQuote()` individually.
-    function test_GetPriceInQuote() external {
-        vm.createSelectFork(vm.envString("MAINNET_RPC_URL"), 18_021_563);
-
-        // stEth in usdc
-        // calculated - 1724550123000000000000
-        // safe price - 1736857822983362723964
-        uint256 calculatedPrice = uint256(1_724_550_123_000_000_000_000);
-        uint256 safePrice = priceOracle.getPriceInQuote(STETH_MAINNET, USDC_MAINNET);
-        (uint256 upperBound, uint256 lowerBound) = _getTwoPercentTolerance(calculatedPrice);
-        assertGt(upperBound, safePrice);
-        assertLt(lowerBound, safePrice);
-
-        // usdt in crv
-        // calculated - 2032995638000000000
-        // safe price - 2017150178107977497
-        calculatedPrice = uint256(2_032_995_638_000_000_000);
-        safePrice = priceOracle.getPriceInQuote(USDT_MAINNET, CRV_MAINNET);
-        (upperBound, lowerBound) = _getTwoPercentTolerance(calculatedPrice);
-        assertGt(upperBound, safePrice);
-        assertLt(lowerBound, safePrice);
-    }
-
-    function _getTwoPercentTolerance(uint256 price) internal pure returns (uint256 upperBound, uint256 lowerBound) {
-        uint256 twoPercentToleranceValue = (price * 2) / 100;
-=======
 contract GetRangePricesLP is RootOracleIntegrationTest {
     function setUp() public override {
         super.setUp();
->>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
 
         // Map pool to oracle
         priceOracle.registerPoolMapping(USDC_DAI_USDT_BAL_POOL, balancerComposableOracle);

@@ -369,6 +369,16 @@ contract LMPVault is
         managementFeeSink = newManagementFeeSink;
     }
 
+    /// @notice Sets the address that will receive management fees.
+    /// @dev Zero address allowable.  Disables fees.
+    /// @param newManagementFeeSink New managment fee address.
+    function setManagementFeeSink(address newManagementFeeSink) external onlyOwner {
+        emit ManagementFeeSinkSet(newManagementFeeSink);
+
+        // slither-disable-next-line missing-zero-check
+        managementFeeSink = newManagementFeeSink;
+    }
+
     /// @notice Set the rewarder contract used by the vault.
     /// @param _rewarder Address of new rewarder.
     function setRewarder(address _rewarder) external {

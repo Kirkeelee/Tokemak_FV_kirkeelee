@@ -437,7 +437,6 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
                     }
                 }
             }
-            }
         }
         
 

@@ -5,11 +5,8 @@ pragma solidity 0.8.17;
 import { Numbers } from "src/echidna/utils/Numbers.sol";
 import { IRootPriceOracle } from "src/interfaces/oracles/IRootPriceOracle.sol";
 
-<<<<<<< HEAD
-=======
 // solhint-disable no-unused-vars
 
->>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
 /// @title Root oracle with no permissions and abilities to set and tweak prices
 contract MockRootOracle is Numbers, IRootPriceOracle {
     address public getSystemRegistry;
@@ -40,8 +37,6 @@ contract MockRootOracle is Numbers, IRootPriceOracle {
     function getPriceInQuote(address base, address quote) external returns (uint256 price) {
         revert NotImplemented();
     }
-<<<<<<< HEAD
-=======
 
     function getRangePricesLP(
         address lpToken,
@@ -59,5 +54,4 @@ contract MockRootOracle is Numbers, IRootPriceOracle {
     ) external returns (uint256) {
         revert NotImplemented();
     }
->>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
 }
