@@ -432,7 +432,8 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
                 if ((priceSafe == 0) || (priceSpot == 0)) {
                     return false;
                 } else if (priceSafe > priceSpot) {
-                    if (((priceSafe * 1.0e18 / priceSpot - 1.0e18) * 10_000) / 1.0e18 > tolerance) {
+                    // mutation: fail to divide by scaler 
+                    if (((priceSafe * 1.0e18 / priceSpot - 1.0e18) * 10_000) > tolerance) {
                         return false;
                     }
                 }

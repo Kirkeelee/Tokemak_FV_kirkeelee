@@ -495,6 +495,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             }
         }
 
+        // mutation: set maxSlippage to 0, nullifying all scenarios
+        maxSlippage = 0;
+        
         // if none of the scenarios are active then this rebalance is invalid
         if (maxSlippage == 0) revert InvalidRebalanceToIdle();
 

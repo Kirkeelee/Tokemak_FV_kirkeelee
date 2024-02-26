@@ -1,5 +1,3 @@
-import "./complexity.spec";
-
 using BalancerAuraDestinationVault as BalancerDestVault;
 using CurveConvexDestinationVault as CurveDestVault;
 using SystemRegistry as systemRegistry;
@@ -24,18 +22,19 @@ methods {
     function _.isDestinationQueuedForRemoval(address dest) external => isDestinationQueuedForRemovalCVL[dest] expect bool;
     function _.getDestinationInfo(address dest) external => getDestinationInfoCVL(dest) expect LMPDebt.DestinationInfo;
 
-    // ERC20's `decimals` summarized as 6, 8 or 18.
-    // This helps with runtime because arbitrary value creates many nonlinear operations.
+    // ERC20's `decimals` summarized as 6, 8 or 18 (validDecimal), can be changed to ALWAYS(18) for better runtime.
+    // This helps with runtime because arbitrary decimal value creates many nonlinear operations.
     function _.decimals() external => validDecimal expect uint256; 
 
     // Can help reduce complexity, think carefully about implications before using.
+    // May need to think of a more clever way to summarize this.
     // function LMPStrategy.getRebalanceValueStats(IStrategy.RebalanceParams memory input) internal returns (LMPStrategy.RebalanceValueStats memory) => getRebalanceValueStatsCVL(input);
     
     /** Dispatchers **/
     // base
     function _.accessController() external => DISPATCHER(true); // needed in constructor, rest is handled by linking
+    function _.current() external => DISPATCHER(true); // can be summarized as currentCVL() for better runtime
     function _.getStats() external => DISPATCHER(true);
-    function _.current() external => NONDET; //DISPATCHER(true);
     function _.getValidatedSpotPrice() external => DISPATCHER(true);
     function _.isShutdown() external => DISPATCHER(true);
     function _.getPool() external => DISPATCHER(true);
@@ -78,6 +77,11 @@ function getDestinationInfoCVL(address dest) returns LMPDebt.DestinationInfo {
     return info;
 }
 
+function currentCVL() returns IDexLSTStats.DexLSTStatsData {
+    IDexLSTStats.DexLSTStatsData data;
+    return data;
+}
+
 /** Ghosts and Hooks **/
 // For base summaries
 ghost uint256 getBptIndexCVL;
@@ -108,8 +112,6 @@ hook Sstore _swapCostOffsetPeriod uint16 defaultValue STORAGE {
 /** Properties **/
 
 use builtin rule sanity;
-
-use rule privilegedOperation;
 
 // Offset period must be between swapCostOffsetMaxInDays and swapCostOffsetMinInDays.
 invariant offsetIsInBetween()
