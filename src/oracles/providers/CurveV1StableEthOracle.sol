@@ -15,6 +15,7 @@ import { ICurveOwner } from "src/interfaces/external/curve/ICurveOwner.sol";
 import { ICurveV1StableSwap } from "src/interfaces/external/curve/ICurveV1StableSwap.sol";
 import { SystemComponent } from "src/SystemComponent.sol";
 import { LibAdapter } from "src/libs/LibAdapter.sol";
+import { Arrays } from "src/utils/Arrays.sol";
 
 /// @title Price oracle for Curve StableSwap pools
 /// @dev getPriceEth is not a view fn to support reentrancy checks. Don't actually change state.
@@ -23,6 +24,7 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
     uint256 public constant FEE_PRECISION = 1e10;
     address public constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
+    // solhint-disable-next-line var-name-mixedcase
     address public immutable WETH;
 
     struct PoolData {
@@ -44,6 +46,9 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
 
     /// @notice Reverse mapping of LP token to pool info
     mapping(address => PoolData) public lpTokenToPool;
+
+    /// @notice Mapping of pool address to it's LP token
+    mapping(address => address) public poolToLpToken;
 
     constructor(
         ISystemRegistry _systemRegistry,
@@ -70,6 +75,10 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         (address[8] memory tokens, uint256 numTokens, address lpToken, bool isStableSwap) =
             curveResolver.resolveWithLpToken(curvePool);
 
+        if (lpTokenToPool[lpToken].pool != address(0) || poolToLpToken[curvePool] != address(0)) {
+            revert Errors.AlreadyRegistered(curvePool);
+        }
+
         // This oracle uses the min-price approach for finding the current value of tokens
         // and only applies to stable swap pools. The resolver will resolve both stable and
         // crypto swap pools so we want to be sure only the correct type gets in.
@@ -90,7 +99,10 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
                 ++i;
             }
         }
+        // Reverse mapping setup
         lpTokenToPool[lpToken] = PoolData({ pool: curvePool, checkReentrancy: checkReentrancy ? 1 : 0 });
+        // Direct mapping setup
+        poolToLpToken[curvePool] = curveLpToken;
 
         emit TokenRegistered(lpToken);
     }
@@ -107,6 +119,9 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         if (lpTokenToUnderlying[curveLpToken].length == 0) {
             revert NotRegistered(curveLpToken);
         }
+
+        address curvePool = lpTokenToPool[curveLpToken].pool;
+        delete poolToLpToken[curvePool];
 
         delete lpTokenToUnderlying[curveLpToken];
         delete lpTokenToPool[curveLpToken];
@@ -181,7 +196,7 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
     ) public view returns (uint256 price, address actualQuoteToken) {
         Errors.verifyNotZero(pool, "pool");
 
-        address lpToken = curveResolver.getLpToken(pool);
+        address lpToken = poolToLpToken[pool];
         address[] memory tokens = lpTokenToUnderlying[lpToken];
 
         uint256 nTokens = tokens.length;
@@ -189,10 +204,20 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
             revert NotRegistered(lpToken);
         }
 
+        (price, actualQuoteToken) = _getSpotPrice(token, pool, tokens, requestedQuoteToken);
+    }
+
+    function _getSpotPrice(
+        address token,
+        address pool,
+        address[] memory tokens,
+        address requestedQuoteToken
+    ) internal view returns (uint256 price, address actualQuoteToken) {
         int256 tokenIndex = -1;
         int256 quoteTokenIndex = -1;
 
         // Find the token and quote token indices
+        uint256 nTokens = tokens.length;
         for (uint256 i = 0; i < nTokens; ++i) {
             address t = tokens[i];
 
@@ -231,6 +256,44 @@ contract CurveV1StableEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         // If the quote token is ETH, we convert it to WETH.
         if (actualQuoteToken == ETH) {
             actualQuoteToken = WETH;
+        }
+    }
+
+    /// @inheritdoc ISpotPriceOracle
+    function getSafeSpotPriceInfo(
+        address pool,
+        address lpToken,
+        address quoteToken
+    ) external view returns (uint256 totalLPSupply, ReserveItemInfo[] memory reserves) {
+        Errors.verifyNotZero(pool, "pool");
+        Errors.verifyNotZero(lpToken, "lpToken");
+        Errors.verifyNotZero(quoteToken, "quoteToken");
+
+        totalLPSupply = IERC20Metadata(lpToken).totalSupply();
+
+        address[] storage tokens = lpTokenToUnderlying[lpToken];
+        uint256 nTokens = tokens.length;
+        if (nTokens == 0) {
+            revert NotRegistered(lpToken);
+        }
+
+        uint256[8] memory balances = curveResolver.getReservesInfo(pool);
+        reserves = new ReserveItemInfo[](nTokens);
+        for (uint256 i = 0; i < nTokens; ++i) {
+            address token = tokens[i];
+
+            if (token == ETH) {
+                token = WETH;
+            }
+
+            (uint256 rawSpotPrice, address actualQuoteToken) = _getSpotPrice(token, pool, tokens, quoteToken);
+
+            reserves[i] = ReserveItemInfo({
+                token: token,
+                reserveAmount: balances[i],
+                rawSpotPrice: rawSpotPrice,
+                actualQuoteToken: actualQuoteToken
+            });
         }
     }
 }

@@ -29,7 +29,8 @@ contract LSTCalculatorBaseTest is Test {
     uint256 private constant END_BLOCK = 17_393_019;
     uint256 private constant END_TIMESTAMP = 1_686_486_143;
 
-    // dates 2023-06-02 to 2023-06-16
+    uint24[10] private foundDiscountHistory =
+        [uint24(0), uint24(0), uint24(0), uint24(0), uint24(0), uint24(0), uint24(0), uint24(0), uint24(0), uint24(0)];
 
     uint256[15] private blocksToCheck = [
         17_403_555,
@@ -44,6 +45,7 @@ contract LSTCalculatorBaseTest is Test {
         17_467_375
     ];
 
+    // 2023-06-02 to 2023-06-16
     uint40[15] private timestamps = [
         uint40(1_685_836_799),
         uint40(1_685_923_199),
@@ -625,13 +627,62 @@ contract LSTCalculatorBaseTest is Test {
         );
     }
 
-    // ######################################## Helper Methods ########################################
+    // ############################## discount history tests ##################################
 
-    function verifyDiscountTimestampByPercent(uint40[5] memory expected, uint40[5] memory actual) private {
-        for (uint256 i = 0; i < 5; i += 1) {
-            assertEq(actual[i], expected[i], "expected != actual");
-        }
+    // solhint-disable-next-line func-name-mixedcase
+    function testFuzz_DiscountHistoryExistingDiscountAtContractDeployment(bool rebase) public {
+        mockIsRebasing(rebase);
+        setBlockAndTimestamp(1);
+        mockCalculateEthPerToken(100e16);
+        initCalculator(99e16);
+        stats = testCalculator.current();
+        foundDiscountHistory = [1e5, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        verifyDiscountHistory(stats.discountHistory, foundDiscountHistory);
     }
+
+    // solhint-disable-next-line func-name-mixedcase
+    function testFuzz_DiscountHistoryPremiumRecordedAsZeroDiscount(bool rebase) public {
+        mockCalculateEthPerToken(100e16);
+        mockIsRebasing(rebase);
+        initCalculator(110e16);
+        setBlockAndTimestamp(1);
+        testCalculator.snapshot();
+        stats = testCalculator.current();
+        foundDiscountHistory = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        verifyDiscountHistory(stats.discountHistory, foundDiscountHistory);
+    }
+
+    // solhint-disable-next-line func-name-mixedcase
+    function testFuzz_DiscountHistoryHighDiscount(bool rebase) public {
+        mockCalculateEthPerToken(100e16);
+        mockIsRebasing(rebase);
+        initCalculator(100e16);
+
+        setBlockAndTimestamp(1);
+        setDiscount(100e16); // 100% discount
+
+        testCalculator.snapshot();
+        stats = testCalculator.current();
+        foundDiscountHistory = [0, 100e5, 0, 0, 0, 0, 0, 0, 0, 0];
+        verifyDiscountHistory(stats.discountHistory, foundDiscountHistory);
+    }
+
+    // solhint-disable-next-line func-name-mixedcase
+    function testFuzz_DiscountHistoryWrapAround(bool rebase) public {
+        mockCalculateEthPerToken(100e16);
+        mockIsRebasing(rebase);
+        initCalculator(100e16);
+        for (uint256 i = 1; i < 14; i += 1) {
+            setBlockAndTimestamp(i);
+            setDiscount(int256(i * 1e16));
+            testCalculator.snapshot();
+        }
+        stats = testCalculator.current();
+        foundDiscountHistory = [10e5, 11e5, 12e5, 13e5, 4e5, 5e5, 6e5, 7e5, 8e5, 9e5];
+        verifyDiscountHistory(stats.discountHistory, foundDiscountHistory);
+    }
+
+    // ############################## helper functions ########################################
 
     function setDiscount(int256 desiredDiscount) private {
         require(desiredDiscount >= 0, "desiredDiscount < 0");
@@ -640,15 +691,27 @@ contract LSTCalculatorBaseTest is Test {
         mockTokenPrice(uint256(int256(100e16) - desiredDiscount));
     }
 
+    function setBlockAndTimestamp(uint256 index) private {
+        vm.roll(uint256(blocksToCheck[index]));
+        vm.warp(uint256(timestamps[index]));
+    }
+
+    function verifyDiscountHistory(uint24[10] memory actual, uint24[10] memory expected) public {
+        for (uint8 i = 0; i < 10; i++) {
+            assertEq(actual[i], expected[i]);
+        }
+    }
+
+    function verifyDiscountTimestampByPercent(uint40[5] memory expected, uint40[5] memory actual) private {
+        for (uint256 i = 0; i < 5; i += 1) {
+            assertEq(actual[i], expected[i], "expected != actual");
+        }
+    }
+
     function verifyDiscount(int256 expectedDiscount) private {
         require(expectedDiscount >= 0, "expectedDiscount < 0");
         int256 foundDiscount = testCalculator.current().discount;
         assertEq(foundDiscount, expectedDiscount);
-    }
-
-    function setBlockAndTimestamp(uint256 index) private {
-        vm.roll(uint256(blocksToCheck[index]));
-        vm.warp(uint256(timestamps[index]));
     }
 
     function initCalculator(uint256 initPrice) private {

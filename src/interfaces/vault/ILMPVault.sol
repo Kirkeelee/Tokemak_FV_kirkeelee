@@ -7,6 +7,7 @@ import { IERC20Permit } from "openzeppelin-contracts/token/ERC20/extensions/draf
 import { IDestinationVault } from "src/interfaces/vault/IDestinationVault.sol";
 import { IStrategy } from "src/interfaces/strategy/IStrategy.sol";
 import { LMPDebt } from "src/vault/libs/LMPDebt.sol";
+import { IMainRewarder } from "src/interfaces/rewarders/IMainRewarder.sol";
 
 interface ILMPVault is IERC4626, IERC20Permit {
     enum VaultShutdownStatus {
@@ -21,7 +22,7 @@ interface ILMPVault is IERC4626, IERC20Permit {
     event TokensPulled(address[] tokens, uint256[] amounts, address[] destinations);
     event TokensRecovered(address[] tokens, uint256[] amounts, address[] destinations);
     event Nav(uint256 idle, uint256 debt, uint256 totalSupply);
-    event RewarderSet(address rewarder);
+    event RewarderSet(address newRewarder, address oldRewarder);
     event DestinationDebtReporting(address destination, uint256 debtValue, uint256 claimed, uint256 claimGasUsed);
     event FeeCollected(uint256 fees, address feeSink, uint256 mintedShares, uint256 profit, uint256 idle, uint256 debt);
     event ManagementFeeCollected(uint256 fees, address feeSink, uint256 mintedShares);
@@ -53,9 +54,6 @@ interface ILMPVault is IERC4626, IERC20Permit {
     // NOTE: will be done going directly to strategy (IStrategy) vault points to.
     //       How it'll delegate is still being decided
     // function setWithdrawalQueue(address[] calldata destinations) external;
-
-    /// @notice Claim Accrued Rewards
-    function claimRewards() external;
 
     /// @notice Set the withdrawal queue to be used when taking out Assets
     /// @param _destinations The ordered list of destination vaults to go for withdrawals
@@ -108,4 +106,13 @@ interface ILMPVault is IERC4626, IERC20Permit {
 
     /// @notice add (or move to if it already exists) a destination to the tail of the withdrawal queue
     function addToWithdrawalQueueTail(address destinationVault) external;
+
+    /// @notice Returns instance of vault rewarder.
+    function rewarder() external view returns (IMainRewarder);
+
+    /// @notice Returns all past rewarders.
+    function getPastRewarders() external view returns (address[] memory _pastRewarders);
+
+    /// @notice Returns boolean telling whether address passed in is past rewarder.
+    function isPastRewarder(address _pastRewarder) external view returns (bool);
 }

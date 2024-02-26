@@ -9,6 +9,7 @@ import {
     WETH9_ADDRESS,
     TOKE_MAINNET,
     WSTETH_MAINNET,
+    MAV_WSTETH_WETH_BOOSTED_POS,
     MAV_WSTETH_WETH_POOL,
     MAV_POOL_INFORMATION,
     WETH_MAINNET
@@ -16,9 +17,10 @@ import {
 
 import { MavEthOracle } from "src/oracles/providers/MavEthOracle.sol";
 import { SystemRegistry, ISystemRegistry } from "src/SystemRegistry.sol";
-import { RootPriceOracle } from "src/oracles/RootPriceOracle.sol";
 import { AccessController, IAccessController } from "src/security/AccessController.sol";
+import { RootPriceOracle } from "src/oracles/RootPriceOracle.sol";
 import { IPriceOracle } from "src/interfaces/oracles/IPriceOracle.sol";
+import { ISpotPriceOracle } from "src/interfaces/oracles/ISpotPriceOracle.sol";
 import { Errors } from "src/utils/Errors.sol";
 
 // solhint-disable func-name-mixedcase
@@ -157,5 +159,14 @@ contract MavEthOracleTest is Test {
 
         // Asking for Weth -> address(0), so should return wsEth.
         assertEq(actualQuoteToken, WSTETH_MAINNET);
+    }
+}
+
+contract GetSafeSpotPriceInfo is MavEthOracleTest {
+    function test_NotImplemented() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotImplemented.selector));
+        // solhint-disable-next-line no-unused-vars
+        (uint256 totalLPSupply, ISpotPriceOracle.ReserveItemInfo[] memory reserves) =
+            mavOracle.getSafeSpotPriceInfo(MAV_WSTETH_WETH_POOL, MAV_WSTETH_WETH_BOOSTED_POS, WETH_MAINNET);
     }
 }

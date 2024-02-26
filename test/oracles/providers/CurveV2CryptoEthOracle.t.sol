@@ -12,7 +12,7 @@ import {
     CRV_ETH_CURVE_V2_LP,
     CRV_ETH_CURVE_V2_POOL,
     THREE_CURVE_MAINNET,
-    STETH_WETH_CURVE_POOL,
+    STETH_WETH_CURVE_POOL_CONCENTRATED,
     CVX_ETH_CURVE_V2_LP,
     STG_USDC_V2_POOL,
     STG_USDC_CURVE_V2_LP,
@@ -27,6 +27,7 @@ import { CurveV2CryptoEthOracle } from "src/oracles/providers/CurveV2CryptoEthOr
 import { SystemRegistry } from "src/SystemRegistry.sol";
 import { AccessController } from "src/security/AccessController.sol";
 import { RootPriceOracle } from "src/oracles/RootPriceOracle.sol";
+import { ISpotPriceOracle } from "src/interfaces/oracles/ISpotPriceOracle.sol";
 import { CurveResolverMainnet } from "src/utils/CurveResolverMainnet.sol";
 import { ISystemRegistry } from "src/interfaces/ISystemRegistry.sol";
 import { ICurveResolver } from "src/interfaces/utils/ICurveResolver.sol";
@@ -99,7 +100,7 @@ contract CurveV2CryptoEthOracleTest is Test {
     function test_LpTokenAlreadyRegistered() external {
         curveOracle.registerPool(CRV_ETH_CURVE_V2_POOL, CRV_ETH_CURVE_V2_LP, false);
 
-        vm.expectRevert(abi.encodeWithSelector(CurveV2CryptoEthOracle.AlreadyRegistered.selector, CRV_ETH_CURVE_V2_LP));
+        vm.expectRevert(abi.encodeWithSelector(Errors.AlreadyRegistered.selector, CRV_ETH_CURVE_V2_POOL));
         curveOracle.registerPool(CRV_ETH_CURVE_V2_POOL, CRV_ETH_CURVE_V2_LP, false);
     }
 
@@ -109,8 +110,10 @@ contract CurveV2CryptoEthOracleTest is Test {
     }
 
     function test_NotCryptoPool() external {
-        vm.expectRevert(abi.encodeWithSelector(CurveV2CryptoEthOracle.NotCryptoPool.selector, STETH_WETH_CURVE_POOL));
-        curveOracle.registerPool(STETH_WETH_CURVE_POOL, CRV_ETH_CURVE_V2_LP, false);
+        vm.expectRevert(
+            abi.encodeWithSelector(CurveV2CryptoEthOracle.NotCryptoPool.selector, STETH_WETH_CURVE_POOL_CONCENTRATED)
+        );
+        curveOracle.registerPool(STETH_WETH_CURVE_POOL_CONCENTRATED, CRV_ETH_CURVE_V2_LP, false);
     }
 
     function test_LpTokenMistmatch() external {
@@ -134,6 +137,8 @@ contract CurveV2CryptoEthOracleTest is Test {
         assertEq(reentrancy, 0);
         assertEq(priceToken, CRV_MAINNET);
         assertEq(tokenFromPrice, WETH9_ADDRESS);
+        // Verify pool to lp token
+        assertEq(CRV_ETH_CURVE_V2_LP, curveOracle.poolToLpToken(CRV_ETH_CURVE_V2_POOL));
     }
 
     // Unregister
@@ -168,6 +173,8 @@ contract CurveV2CryptoEthOracleTest is Test {
         assertEq(reentrancy, 0);
         assertEq(tokenToPrice, address(0));
         assertEq(tokenFromPrice, address(0));
+        // Verify pool to lp token
+        assertEq(address(0), curveOracle.poolToLpToken(CRV_ETH_CURVE_V2_POOL));
     }
 
     // getPriceInEth
@@ -224,5 +231,31 @@ contract CurveV2CryptoEthOracleTest is Test {
     function tesSpotPriceRevertIfNotRegistered() public {
         vm.expectRevert(abi.encodeWithSelector(CurveV2CryptoEthOracle.NotRegistered.selector, RETH_ETH_CURVE_LP));
         curveOracle.getSpotPrice(RETH_MAINNET, RETH_WETH_CURVE_POOL, WETH9_ADDRESS);
+    }
+
+    function testGetSafeSpotPriceRevertIfZeroAddress() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.ZeroAddress.selector, "pool"));
+        curveOracle.getSafeSpotPriceInfo(address(0), RETH_ETH_CURVE_LP, WETH9_ADDRESS);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.ZeroAddress.selector, "lpToken"));
+        curveOracle.getSafeSpotPriceInfo(RETH_WETH_CURVE_POOL, address(0), WETH9_ADDRESS);
+    }
+
+    function testGetSafeSpotPriceInfo() public {
+        curveOracle.registerPool(RETH_WETH_CURVE_POOL, RETH_ETH_CURVE_LP, true);
+
+        (uint256 totalLPSupply, ISpotPriceOracle.ReserveItemInfo[] memory reserves) =
+            curveOracle.getSafeSpotPriceInfo(RETH_WETH_CURVE_POOL, RETH_ETH_CURVE_LP, WETH9_ADDRESS);
+
+        assertEq(reserves.length, 2);
+        assertEq(totalLPSupply, 4_463_086_556_894_704_039_754, "totalLPSupply invalid");
+        assertEq(reserves[0].token, WETH9_ADDRESS);
+        assertEq(reserves[0].reserveAmount, 4_349_952_278_063_931_733_845, "token1: wrong reserve amount");
+        assertEq(reserves[0].rawSpotPrice, 928_736_964_397_357_484, "token1: spotPrice invalid");
+        // TODO: quote token variance
+        assertEq(reserves[1].token, RETH_MAINNET, "wrong token2");
+        assertEq(reserves[1].reserveAmount, 4_572_227_874_589_066_847_253, "token2: wrong reserve amount");
+        assertEq(reserves[1].rawSpotPrice, 1_076_727_311_259_202_406, "token2: spotPrice invalid");
+        // TODO: quote token variance check
     }
 }

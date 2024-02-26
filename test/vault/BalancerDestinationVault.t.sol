@@ -2,20 +2,18 @@
 // Copyright (c) 2023 Tokemak Foundation. All rights reserved.
 pragma solidity >=0.8.17;
 
-// solhint-disable func-name-mixedcase,max-stats-count
+// solhint-disable func-name-mixedcase
+// solhint-disable avoid-low-level-calls
 
 import { ISystemComponent } from "src/interfaces/ISystemComponent.sol";
-import { Errors } from "src/utils/Errors.sol";
-import { Test, StdCheats, StdUtils } from "forge-std/Test.sol";
+import { Test } from "forge-std/Test.sol";
 import { DestinationVault, IDestinationVault } from "src/vault/DestinationVault.sol";
-import { ISystemRegistry } from "src/interfaces/ISystemRegistry.sol";
 import { ERC20 } from "openzeppelin-contracts/token/ERC20/ERC20.sol";
-import { IERC20Metadata as IERC20 } from "openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { IERC20 } from "openzeppelin-contracts/token/ERC20/IERC20.sol";
+import { IERC20Metadata } from "openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { SystemRegistry } from "src/SystemRegistry.sol";
 import { ILMPVaultRegistry } from "src/interfaces/vault/ILMPVaultRegistry.sol";
-import { ISystemRegistry } from "src/interfaces/ISystemRegistry.sol";
-import { TestERC20 } from "test/mocks/TestERC20.sol";
-import { IAccessController, AccessController } from "src/security/AccessController.sol";
+import { AccessController } from "src/security/AccessController.sol";
 import { Roles } from "src/libs/Roles.sol";
 import { DestinationVaultFactory } from "src/vault/DestinationVaultFactory.sol";
 import { DestinationVaultRegistry } from "src/vault/DestinationVaultRegistry.sol";
@@ -24,26 +22,24 @@ import { IWETH9 } from "src/interfaces/utils/IWETH9.sol";
 import { LMPVaultRegistry } from "src/vault/LMPVaultRegistry.sol";
 import { IRootPriceOracle } from "src/interfaces/oracles/IRootPriceOracle.sol";
 import { SwapRouter } from "src/swapper/SwapRouter.sol";
+import { BalancerDestinationVault } from "src/vault/BalancerDestinationVault.sol";
 import { ISwapRouter } from "src/interfaces/swapper/ISwapRouter.sol";
+import { IVault } from "src/interfaces/external/balancer/IVault.sol";
+import { BalancerV2Swap } from "src/swapper/adapters/BalancerV2Swap.sol";
 import {
     WETH_MAINNET,
-    MAV_WSTETH_WETH_POOL,
-    MAV_ROUTER,
+    WSETH_WETH_BAL_POOL,
     STETH_MAINNET,
-    MAV_WSTETH_WETH_BOOSTED_POS_REWARDER,
-    MAV_WSTETH_WETH_BOOSTED_POS,
     BAL_VAULT,
-    LDO_MAINNET,
+    BAL_MAINNET,
     WSTETH_MAINNET,
-    WSETH_WETH_BAL_POOL
+    BAL_WSTETH_WETH_WHALE
 } from "test/utils/Addresses.sol";
 import { TestIncentiveCalculator } from "test/mocks/TestIncentiveCalculator.sol";
-import { ILMPVaultRegistry } from "src/interfaces/vault/ILMPVaultRegistry.sol";
-import { MaverickDestinationVault } from "src/vault/MaverickDestinationVault.sol";
-import { BalancerV2Swap } from "src/swapper/adapters/BalancerV2Swap.sol";
-import { IReward } from "src/interfaces/external/maverick/IReward.sol";
 
-contract MaverickDestinationVaultTests is Test {
+contract BalancerDestinationVaultTests is Test {
+    address private constant LP_TOKEN_WHALE = BAL_WSTETH_WETH_WHALE; //~20
+
     uint256 private _mainnetFork;
 
     SystemRegistry private _systemRegistry;
@@ -58,19 +54,23 @@ contract MaverickDestinationVaultTests is Test {
     IWETH9 private _asset;
 
     IERC20 private _underlyer;
+
     TestIncentiveCalculator private _testIncentiveCalculator;
-    MaverickDestinationVault private _destVault;
+
+    BalancerDestinationVault private _destVault;
 
     SwapRouter private swapRouter;
     BalancerV2Swap private balSwapper;
 
     address[] private additionalTrackedTokens;
 
-    function setUp() public {
-        additionalTrackedTokens = new address[](0);
+    event UnderlyerRecovered(address destination, uint256 amount);
 
-        _mainnetFork = vm.createFork(vm.envString("MAINNET_RPC_URL"), 17_360_127);
+    function setUp() public {
+        _mainnetFork = vm.createFork(vm.envString("MAINNET_RPC_URL"), 17_586_885);
         vm.selectFork(_mainnetFork);
+
+        additionalTrackedTokens = new address[](0);
 
         vm.label(address(this), "testContract");
 
@@ -109,13 +109,10 @@ contract MaverickDestinationVaultTests is Test {
         _destinationVaultFactory = new DestinationVaultFactory(_systemRegistry, 1, 1000);
         _destinationVaultRegistry.setVaultFactory(address(_destinationVaultFactory));
 
-        _underlyer = IERC20(MAV_WSTETH_WETH_BOOSTED_POS);
+        _underlyer = IERC20(WSETH_WETH_BAL_POOL);
         vm.label(address(_underlyer), "underlyer");
 
-        _testIncentiveCalculator = new TestIncentiveCalculator();
-        _testIncentiveCalculator.setLpToken(address(_underlyer));
-
-        MaverickDestinationVault dvTemplate = new MaverickDestinationVault(_systemRegistry);
+        BalancerDestinationVault dvTemplate = new BalancerDestinationVault(_systemRegistry, BAL_VAULT);
         bytes32 dvType = keccak256(abi.encode("template"));
         bytes32[] memory dvTypes = new bytes32[](1);
         dvTypes[0] = dvType;
@@ -126,14 +123,11 @@ contract MaverickDestinationVaultTests is Test {
 
         _accessController.grantRole(Roles.CREATE_DESTINATION_VAULT_ROLE, address(this));
 
-        MaverickDestinationVault.InitParams memory initParams = MaverickDestinationVault.InitParams({
-            maverickRouter: MAV_ROUTER,
-            maverickBoostedPosition: MAV_WSTETH_WETH_BOOSTED_POS,
-            maverickRewarder: MAV_WSTETH_WETH_BOOSTED_POS_REWARDER,
-            maverickPool: MAV_WSTETH_WETH_POOL
-        });
+        BalancerDestinationVault.InitParams memory initParams =
+            BalancerDestinationVault.InitParams({ balancerPool: WSETH_WETH_BAL_POOL });
         bytes memory initParamBytes = abi.encode(initParams);
-
+        _testIncentiveCalculator = new TestIncentiveCalculator();
+        _testIncentiveCalculator.setPoolAddress(address(_underlyer));
         address payable newVault = payable(
             _destinationVaultFactory.create(
                 "template",
@@ -147,7 +141,7 @@ contract MaverickDestinationVaultTests is Test {
         );
         vm.label(newVault, "destVault");
 
-        _destVault = MaverickDestinationVault(newVault);
+        _destVault = BalancerDestinationVault(newVault);
 
         _rootPriceOracle = IRootPriceOracle(vm.addr(34_399));
         vm.label(address(_rootPriceOracle), "rootPriceOracle");
@@ -165,12 +159,8 @@ contract MaverickDestinationVaultTests is Test {
     }
 
     function test_initializer_ConfiguresVault() public {
-        MaverickDestinationVault.InitParams memory initParams = MaverickDestinationVault.InitParams({
-            maverickRouter: MAV_ROUTER,
-            maverickBoostedPosition: MAV_WSTETH_WETH_BOOSTED_POS,
-            maverickRewarder: MAV_WSTETH_WETH_BOOSTED_POS_REWARDER,
-            maverickPool: MAV_WSTETH_WETH_POOL
-        });
+        BalancerDestinationVault.InitParams memory initParams =
+            BalancerDestinationVault.InitParams({ balancerPool: WSETH_WETH_BAL_POOL });
         bytes memory initParamBytes = abi.encode(initParams);
 
         address payable newVault = payable(
@@ -188,43 +178,46 @@ contract MaverickDestinationVaultTests is Test {
         assertTrue(DestinationVault(newVault).underlyingTokens().length > 0);
     }
 
-    function test_exchangeName_ReturnsMaverick() public {
-        assertEq(_destVault.exchangeName(), "maverick");
+    function test_exchangeName_Returns() public {
+        assertEq(_destVault.exchangeName(), "balancer");
     }
 
-    function test_underlyingTokens_ReturnsPoolTokens() public {
+    function test_underlyingTokens_ReturnsForMetastable() public {
         address[] memory tokens = _destVault.underlyingTokens();
 
         assertEq(tokens.length, 2);
-        assertEq(IERC20(tokens[0]).symbol(), "wstETH");
-        assertEq(IERC20(tokens[1]).symbol(), "WETH");
+        assertEq(IERC20Metadata(tokens[0]).symbol(), "wstETH");
+        assertEq(IERC20Metadata(tokens[1]).symbol(), "WETH");
     }
 
-    function test_deposit_IsStakedIntoRewarder() public {
+    function test_depositUnderlying_TokensStayInDestinationVault() public {
         // Get some tokens to play with
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 100e18);
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 10e18);
 
         // Give us deposit rights
         _mockIsVault(address(this), true);
 
         // Deposit
-        _underlyer.approve(address(_destVault), 100e18);
-        _destVault.depositUnderlying(100e18);
+        _underlyer.approve(address(_destVault), 10e18);
+        _destVault.depositUnderlying(10e18);
 
-        // Ensure the funds went to Mav
-        assertEq(_destVault.externalQueriedBalance(), 100e18);
+        // Ensure the funds are present internally
+        assertEq(_destVault.internalDebtBalance(), 10e18);
+        assertEq(_underlyer.balanceOf(address(_destVault)), 10e18);
     }
 
-    function test_collectRewards_TransfersToCaller() public {
+    function test_collectRewards_ReturnsNoTokensAndAmounts() public {
         // Get some tokens to play with
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 100e18);
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 10e18);
 
         // Give us deposit rights
         _mockIsVault(address(this), true);
 
         // Deposit
-        _underlyer.approve(address(_destVault), 100e18);
-        _destVault.depositUnderlying(100e18);
+        _underlyer.approve(address(_destVault), 10e18);
+        _destVault.depositUnderlying(10e18);
 
         // Move 7 days later
         vm.roll(block.number + 7200 * 7);
@@ -233,85 +226,87 @@ contract MaverickDestinationVaultTests is Test {
 
         _accessController.grantRole(Roles.LIQUIDATOR_ROLE, address(this));
 
-        IERC20 ldo = IERC20(LDO_MAINNET);
-
-        uint256 preBalLDO = ldo.balanceOf(address(this));
-
         (uint256[] memory amounts, address[] memory tokens) = _destVault.collectRewards();
 
         assertEq(amounts.length, tokens.length);
-        assertEq(tokens.length, 2);
-        assertEq(address(tokens[0]), address(0));
-        assertEq(address(tokens[1]), LDO_MAINNET);
-
-        assertTrue(amounts[0] == 0);
-        assertTrue(amounts[1] > 0);
-
-        uint256 afterBalLDO = ldo.balanceOf(address(this));
-
-        assertEq(amounts[1], afterBalLDO - preBalLDO);
+        assertEq(tokens.length, 0);
     }
 
-    function test_withdrawUnderlying_SendsOneForOneToReceiver() public {
+    function test_withdrawUnderlying() public {
         // Get some tokens to play with
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 100e18);
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 10e18);
 
         // Give us deposit rights
         _mockIsVault(address(this), true);
 
         // Deposit
-        _underlyer.approve(address(_destVault), 100e18);
-        _destVault.depositUnderlying(100e18);
+        _underlyer.approve(address(_destVault), 10e18);
+        _destVault.depositUnderlying(10e18);
 
-        // Ensure the funds went to Mav
-        assertEq(_destVault.externalQueriedBalance(), 100e18);
+        // Ensure the funds went to vault
+        assertEq(_destVault.internalQueriedBalance(), 10e18);
 
         address receiver = vm.addr(555);
-        uint256 received = _destVault.withdrawUnderlying(50e18, receiver);
+        uint256 received = _destVault.withdrawUnderlying(10e18, receiver);
 
-        assertEq(received, 50e18);
-        assertEq(_underlyer.balanceOf(receiver), 50e18);
+        assertEq(received, 10e18);
+        assertEq(_underlyer.balanceOf(receiver), 10e18);
+        assertEq(_destVault.internalDebtBalance(), 0e18);
+        assertEq(_destVault.externalDebtBalance(), 0e18);
     }
 
-    function test_withdrawBaseAsset_SwapsToBaseAndSendsToReceiver() public {
+    function test_withdrawBaseAsset_ReturnsAppropriateAmount() public {
         // Get some tokens to play with
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 1e18);
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 10e18);
 
         // Give us deposit rights
         _mockIsVault(address(this), true);
 
         // Deposit
-        _underlyer.approve(address(_destVault), 1e18);
-        _destVault.depositUnderlying(1e18);
+        _underlyer.approve(address(_destVault), 10e18);
+        _destVault.depositUnderlying(10e18);
 
         address receiver = vm.addr(555);
         uint256 startingBalance = _asset.balanceOf(receiver);
 
-        uint256 received = _destVault.withdrawBaseAsset(5e17, receiver);
+        uint256 received = _destVault.withdrawBaseAsset(10e18, receiver);
 
-        assertEq(_asset.balanceOf(receiver) - startingBalance, 637_692_400_777_456_012);
+        // Bal pool has a rough pool value of $96,362,068
+        // Total Supply of 50180.410952857663703844
+        // Eth Price: $1855
+        // PPS: 1.035208869 w/10 shares ~= 10.35208869
+
+        assertEq(_asset.balanceOf(receiver) - startingBalance, 10_356_898_854_512_073_834);
         assertEq(received, _asset.balanceOf(receiver) - startingBalance);
     }
 
-    /// @dev Based on the same data as test_withdrawBaseAsset_SwapsToBaseAndSendsToReceiver
-    function test_EstimatewithdrawBaseAsset_SwapsToBaseAndSendsToReceiver() public {
+    /// @dev Based on the same data as test_withdrawBaseAsset_ReturnsAppropriateAmount
+    function test_estimateWithdrawBaseAsset_ReturnsAppropriateAmount() public {
         // Get some tokens to play with
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 1e18);
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 10e18);
 
         // Give us deposit rights
         _mockIsVault(address(this), true);
 
         // Deposit
-        _underlyer.approve(address(_destVault), 1e18);
-        _destVault.depositUnderlying(1e18);
+        _underlyer.approve(address(_destVault), 10e18);
+        _destVault.depositUnderlying(10e18);
 
         address receiver = vm.addr(555);
 
         uint256 beforeBalance = _asset.balanceOf(receiver);
-        uint256 received = _destVault.estimateWithdrawBaseAsset(5e17, receiver, address(0));
+        uint256 received = _destVault.estimateWithdrawBaseAsset(10e18, receiver, address(0));
         uint256 afterBalance = _asset.balanceOf(receiver);
 
-        assertEq(received, 637_692_400_777_456_012);
+        // Bal pool has a rough pool value of $96,362,068
+        // Total Supply of 50180.410952857663703844
+        // Eth Price: $1855
+        // PPS: 1.035208869 w/10 shares ~= 10.35208869
+
+        assertEq(received, 10_356_898_854_512_073_834);
         assertEq(beforeBalance, afterBalance);
     }
 
@@ -323,8 +318,9 @@ contract MaverickDestinationVaultTests is Test {
         uint256 localDepositAmount = 1000;
         uint256 localWithdrawalAmount = 600;
 
-        // Deal this address some tokens.
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), localDepositAmount);
+        // Transfer tokens to address.
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), localDepositAmount);
 
         // Allow this address to deposit.
         _mockIsVault(address(this), true);
@@ -338,19 +334,20 @@ contract MaverickDestinationVaultTests is Test {
         _destVault.depositUnderlying(localDepositAmount);
 
         // Check balances after deposit.
-        assertEq(_destVault.internalDebtBalance(), 0);
-        assertEq(_destVault.externalDebtBalance(), localDepositAmount);
+        assertEq(_destVault.internalDebtBalance(), localDepositAmount);
+        assertEq(_destVault.externalDebtBalance(), 0);
 
         _destVault.withdrawUnderlying(localWithdrawalAmount, address(this));
 
         // Check balances after withdrawing underlyer.
-        assertEq(_destVault.internalDebtBalance(), 0);
-        assertEq(_destVault.externalDebtBalance(), localDepositAmount - localWithdrawalAmount);
+        assertEq(_destVault.internalDebtBalance(), localDepositAmount - localWithdrawalAmount);
+        assertEq(_destVault.externalDebtBalance(), 0);
     }
 
     function test_InternalDebtBalance_CannotBeManipulated() external {
-        // Deal this address some underlyer.
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 1000);
+        // Transfer tokens to address.
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 1000);
 
         // Transfer to DV directly.
         _underlyer.transfer(address(_destVault), 1000);
@@ -362,26 +359,10 @@ contract MaverickDestinationVaultTests is Test {
         assertEq(_destVault.internalDebtBalance(), 0);
     }
 
-    function test_ExternalDebtBalance_CannotBeManipulated() external {
-        // Deal this address some underlyer.
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 1000);
-
-        IReward rewarder = IReward(MAV_WSTETH_WETH_BOOSTED_POS_REWARDER);
-
-        // Stake on behalf of DV into Mav rewarder.
-        _underlyer.approve(address(rewarder), 1000);
-        rewarder.stake(1000, address(_destVault));
-
-        // Ensure that rewarder has balance for DV.
-        assertEq(rewarder.balanceOf(address(_destVault)), 1000);
-
-        // Make sure that DV not picking up external balances.
-        assertEq(_destVault.externalDebtBalance(), 0);
-    }
-
     function test_InternalQueriedBalance_CapturesUnderlyerInVault() external {
-        // Deal token to this contract.
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 1000);
+        // Transfer tokens to address.
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 1000);
 
         // Transfer to DV directly.
         _underlyer.transfer(address(_destVault), 1000);
@@ -389,26 +370,66 @@ contract MaverickDestinationVaultTests is Test {
         assertEq(_destVault.internalQueriedBalance(), 1000);
     }
 
-    function test_ExternalQueriedBalance_CapturesUnderlyerNotStakedByVault() external {
-        // Deal this address some underlyer.
-        deal(address(MAV_WSTETH_WETH_BOOSTED_POS), address(this), 1000);
+    /**
+     * Below three functions test `DestinationVault.recoverUnderlying()`.  When there is an excess externally staked
+     *      balance, this function interacts with the  protocol that the underlyer is staked into, making it easier
+     *      to test here with a full working DV rather than the TestDestinationVault contract in
+     *      `DestinationVault.t.sol`.
+     */
+    function test_recoverUnderlying_RunsProperly_RecoverInternal() external {
+        address recoveryAddress = vm.addr(1);
 
-        IReward rewarder = IReward(MAV_WSTETH_WETH_BOOSTED_POS_REWARDER);
+        // Give contract TOKEN_RECOVERY_ROLE.
+        _accessController.setupRole(Roles.TOKEN_RECOVERY_ROLE, address(this));
 
-        // Stake on behalf of DV into Mav rewarder.
-        _underlyer.approve(address(rewarder), 1000);
-        rewarder.stake(1000, address(_destVault));
+        // Transfer tokens to this contract.
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 1000);
 
-        // Ensure that rewarder has balance for DV.
-        assertEq(rewarder.balanceOf(address(_destVault)), 1000);
+        // Transfer LP in vault.
+        _underlyer.transfer(address(_destVault), 555);
 
-        // Make sure that DV not picking up external balances.  Used to query rewarder.
-        assertEq(_destVault.externalQueriedBalance(), 1000);
+        vm.expectEmit(false, false, false, true);
+        emit UnderlyerRecovered(recoveryAddress, 555);
+        _destVault.recoverUnderlying(recoveryAddress);
+
+        // Make sure underlyer made its way to recoveryAddress.
+        assertEq(_underlyer.balanceOf(recoveryAddress), 555);
+    }
+
+    // Tests to make sure that excess external debt is being calculated properly.
+    function test_recoverUnderlying_RunsProperly_ExternalDebt() external {
+        address recoveryAddress = vm.addr(1);
+
+        // Give contract TOKEN_RECOVERY_ROLE.
+        _accessController.setupRole(Roles.TOKEN_RECOVERY_ROLE, address(this));
+
+        // Transfer tokens to this contract.
+        vm.prank(LP_TOKEN_WHALE);
+        _underlyer.transfer(address(this), 2000);
+
+        // Deposit underlying through DV.
+        _mockIsVault(address(this), true);
+        _underlyer.approve(address(_destVault), 44);
+        _destVault.depositUnderlying(44);
+
+        // Transfer LP to Vault
+        _underlyer.transfer(address(_destVault), 555);
+
+        // Recover underlying, check event.
+        vm.expectEmit(false, false, false, true);
+        emit UnderlyerRecovered(recoveryAddress, 555);
+        _destVault.recoverUnderlying(recoveryAddress);
+
+        // Ensure that amount staked through DV is still present.
+        assertEq(_underlyer.balanceOf(address(_destVault)), 44);
+
+        // Make sure underlyer made its way to recoveryAddress.
+        assertEq(_underlyer.balanceOf(recoveryAddress), 555);
     }
 
     function test_DestinationVault_getPool() external {
-        assertEq(_destVault.getPool(), MAV_WSTETH_WETH_POOL);
-        assertEq(IDestinationVault(_destVault).getPool(), MAV_WSTETH_WETH_POOL);
+        assertEq(IDestinationVault(_destVault).getPool(), WSETH_WETH_BAL_POOL);
     }
 
     function _mockSystemBound(address registry, address addr) internal {

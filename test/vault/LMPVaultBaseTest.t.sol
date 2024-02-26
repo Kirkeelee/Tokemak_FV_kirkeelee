@@ -22,6 +22,7 @@ import { Roles } from "src/libs/Roles.sol";
 import { BaseTest } from "test/BaseTest.t.sol";
 import { VaultTypes } from "src/vault/VaultTypes.sol";
 import { TestDestinationVault } from "test/mocks/TestDestinationVault.sol";
+import { TestIncentiveCalculator } from "test/mocks/TestIncentiveCalculator.sol";
 
 import { WETH9_ADDRESS } from "test/utils/Addresses.sol";
 
@@ -40,6 +41,7 @@ contract LMPVaultBaseTest is BaseTest {
     event DestinationVaultAdded(address destination);
     event DestinationVaultRemoved(address destination);
     event WithdrawalQueueSet(address[] destinations);
+    event RewarderSet(address newRewarder, address oldRewarder);
 
     function setUp() public virtual override(BaseTest) {
         BaseTest.setUp();
@@ -57,6 +59,7 @@ contract LMPVaultBaseTest is BaseTest {
 
         accessController.grantRole(Roles.DESTINATION_VAULTS_UPDATER, address(this));
         accessController.grantRole(Roles.SET_WITHDRAWAL_QUEUE_ROLE, address(this));
+        accessController.grantRole(Roles.LMP_REWARD_MANAGER_ROLE, address(this));
 
         // create test lmpVault
         ILMPVaultFactory vaultFactory = systemRegistry.getLMPVaultFactoryByType(VaultTypes.LST);
@@ -80,7 +83,11 @@ contract LMPVaultBaseTest is BaseTest {
         // create vault (no need to initialize since working with mock)
 
         address underlyer = address(new TestERC20("underlyer", "underlyer"));
-        IDestinationVault vault = new TestDestinationVault(systemRegistry, vm.addr(34_343), asset, underlyer);
+        TestIncentiveCalculator testIncentiveCalculator = new TestIncentiveCalculator();
+        testIncentiveCalculator.setLpToken(underlyer);
+        IDestinationVault vault = new TestDestinationVault(
+            systemRegistry, vm.addr(34_343), asset, underlyer, address(testIncentiveCalculator)
+        );
         // mock "isRegistered" call
         vm.mockCall(
             address(systemRegistry.destinationVaultRegistry()),
@@ -93,7 +100,7 @@ contract LMPVaultBaseTest is BaseTest {
 
     //////////////////////////////////////////////////////////////////////
     //                                                                  //
-    //				    Destination Vaults lists						//
+    //				    Destination Vaults lists						                  //
     //                                                                  //
     //////////////////////////////////////////////////////////////////////
 
@@ -213,7 +220,134 @@ contract LMPVaultBaseTest is BaseTest {
 
     //////////////////////////////////////////////////////////////////////
     //                                                                  //
-    //			                Rebalancer                      		//
+    //			                Setting rewarder                      		  //
+    //                                                                  //
+    //////////////////////////////////////////////////////////////////////
+
+    function test_RevertIncorrectRole_AndNotFactory() public {
+        address notRoleOrFactory = makeAddr("NOT_REWARD_ROLE_OR_FACTORY");
+        vm.startPrank(notRoleOrFactory);
+
+        assertTrue(notRoleOrFactory != address(lmpVaultFactory));
+        assertTrue(!accessController.hasRole(Roles.LMP_REWARD_MANAGER_ROLE, notRoleOrFactory));
+
+        vm.expectRevert(Errors.AccessDenied.selector);
+        lmpVault.setRewarder(makeAddr("REWARDER"));
+
+        vm.stopPrank();
+    }
+
+    function test_RevertZeroAddress_setRewarder() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.ZeroAddress.selector, "rewarder"));
+        lmpVault.setRewarder(address(0));
+    }
+
+    function test_FactoryCanSetRewarder() public {
+        address rewarder = makeAddr("REWARDER");
+        address oldRewarder = address(lmpVault.rewarder());
+
+        vm.prank(address(lmpVaultFactory));
+        vm.expectEmit(false, false, false, true);
+        emit RewarderSet(rewarder, oldRewarder);
+
+        lmpVault.setRewarder(rewarder);
+
+        assertEq(address(lmpVault.rewarder()), rewarder);
+    }
+
+    function test_LMPRewardManagerRole_CanSetRewarder() public {
+        assertTrue(accessController.hasRole(Roles.LMP_REWARD_MANAGER_ROLE, address(this)));
+
+        address rewarder = makeAddr("REWARDER");
+        address oldRewarder = address(lmpVault.rewarder());
+
+        vm.expectEmit(false, false, false, true);
+        emit RewarderSet(rewarder, oldRewarder);
+        lmpVault.setRewarder(rewarder);
+
+        assertEq(address(lmpVault.rewarder()), rewarder);
+    }
+
+    function test_RewarderReplacedProperly() public {
+        address firstRewarder = makeAddr("FIRST_REWARDER");
+        address secondRewarder = makeAddr("SECOND_REWARDER");
+
+        // Set first rewarder.
+        lmpVault.setRewarder(firstRewarder);
+        assertEq(address(lmpVault.rewarder()), firstRewarder);
+
+        // Replace with new rewarder.
+        vm.expectEmit(false, false, false, true);
+        emit RewarderSet(secondRewarder, firstRewarder);
+
+        lmpVault.setRewarder(secondRewarder);
+
+        assertEq(address(lmpVault.rewarder()), secondRewarder);
+        assertTrue(lmpVault.isPastRewarder(firstRewarder));
+    }
+
+    function test_PastRewardersState_NotUpdatedFor_ReplacingZeroAddress() public {
+        address rewarder = makeAddr("REWARDER");
+        lmpVault.setRewarder(rewarder);
+
+        assertTrue(!lmpVault.isPastRewarder(address(0)));
+    }
+
+    function test_RevertsWhenRewarderIsDuplicate() public {
+        address factoryRewarder = address(lmpVault.rewarder());
+
+        vm.expectRevert(Errors.ItemExists.selector);
+        lmpVault.setRewarder(factoryRewarder);
+    }
+
+    function test_RevertsWhenPastRewarderIsDuplicate() public {
+        address factoryRewarder = address(lmpVault.rewarder());
+        address nonFactoryRewarder = makeAddr("NOT_FACTORY_REWARDER");
+
+        lmpVault.setRewarder(nonFactoryRewarder);
+
+        // Will revert for factory rewarder being in past rewarders EnumberableSet.
+        vm.expectRevert(Errors.ItemExists.selector);
+
+        lmpVault.setRewarder(factoryRewarder);
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    //                                                                  //
+    //			                Rewarder view functions                     //
+    //                                                                  //
+    //////////////////////////////////////////////////////////////////////
+
+    function test_GetsAllPastRewarders() public {
+        address rewarderOne = address(lmpVault.rewarder()); // First rewarder set by factory creation.
+        address rewarderTwo = makeAddr("REWARDER_TWO");
+        address rewarderThree = makeAddr("REWARDER_THREE");
+
+        // Set new rewarder twice, first two should be set to past rewarders.
+        lmpVault.setRewarder(rewarderTwo);
+        lmpVault.setRewarder(rewarderThree);
+
+        address[] memory pastRewarders = lmpVault.getPastRewarders();
+
+        assertEq(pastRewarders.length, 2);
+        // OZ says that there is no guarentee on ordering
+        assertTrue(pastRewarders[0] == rewarderOne || pastRewarders[0] == rewarderTwo);
+        assertTrue(pastRewarders[1] == rewarderOne || pastRewarders[1] == rewarderTwo);
+    }
+
+    function test_CorrectlyReturnsPastRewarder() public {
+        address factoryRewarder = address(lmpVault.rewarder());
+        address nonFactoryRewarder = makeAddr("NOT_FACTORY_REWARDER");
+
+        // Push factory rewarder to past rewarders.
+        lmpVault.setRewarder(nonFactoryRewarder);
+
+        assertTrue(lmpVault.isPastRewarder(factoryRewarder));
+    }
+
+    //////////////////////////////////////////////////////////////////////
+    //                                                                  //
+    //			                Rebalancer                      		        //
     //                                                                  //
     //////////////////////////////////////////////////////////////////////
 
