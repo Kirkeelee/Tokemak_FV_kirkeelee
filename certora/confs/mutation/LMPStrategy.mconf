@@ -1,0 +1,12 @@
+{ 
+   "gambit": {                                                 
+      "filename" : "../../../src/InterestRate.sol",
+      "num_mutants": 10,
+      "solc_remappings": [
+        "@openzeppelin=../../../lib/openzeppelin-contracts",
+      ]
+   },
+   "manual_mutants": {
+      "../../../src/InterestRate.sol": "../../mutations/InterestRate"
+   }
+}

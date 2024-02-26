@@ -38,7 +38,7 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
     error VaultShutdown();
     error InvalidIncentiveCalculator();
 
-    ISystemRegistry internal immutable _systemRegistry; // HARNESS: removed immutable
+    ISystemRegistry internal immutable _systemRegistry;
 
     /* ******************************** */
     /* State Variables                  */

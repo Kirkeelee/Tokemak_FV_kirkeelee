@@ -1,5 +1,5 @@
 import "./complexity.spec";
-import "./vaultSummaries.spec";
+// import "./vaultSummaries.spec";
 
 // using LMPVault as Vault;
 using BalancerAuraDestinationVault as BalancerDestVault;
@@ -81,7 +81,7 @@ use builtin rule sanity;
 
 use rule privilegedOperation;
 
-use rule 
+use rule simpleFrontRunning;
 
 ghost uint256 getBptIndexCVL;
 
