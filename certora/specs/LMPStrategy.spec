@@ -33,6 +33,7 @@ methods {
     
     /** Dispatchers **/
     // base
+    function _.accessController() external => DISPATCHER(true); // needed in constructor, rest is handled by linking
     function _.getStats() external => DISPATCHER(true);
     function _.current() external => NONDET; //DISPATCHER(true);
     function _.getValidatedSpotPrice() external => DISPATCHER(true);

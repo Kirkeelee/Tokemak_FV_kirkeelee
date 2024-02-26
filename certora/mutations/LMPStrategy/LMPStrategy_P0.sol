@@ -377,7 +377,8 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         // Get the price of one unit of the underlying lp token, the params.tokenOut/tokenIn
         // Prices are calculated using the spot of price of the constituent tokens
         // validated to be within a tolerance of the safe price of those tokens
-        uint256 outPrice = params.destinationOut != lmpVaultAddress
+        // mutation: replace `params.destinationOut != lmpVaultAddress` with `true`
+        uint256 outPrice = true
             ? IDestinationVault(params.destinationOut).getValidatedSpotPrice()
             : 10 ** tokenOutDecimals;
 
@@ -386,7 +387,8 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             : 10 ** tokenInDecimals;
 
         // prices are 1e18 and we want values in 1e18, so divide by token decimals
-        uint256 outEthValue = params.destinationOut != lmpVaultAddress
+        // mutation: replace `params.destinationOut != lmpVaultAddress` with `true`
+        uint256 outEthValue = true
             ? outPrice * params.amountOut / 10 ** tokenOutDecimals
             : params.amountOut;
 
