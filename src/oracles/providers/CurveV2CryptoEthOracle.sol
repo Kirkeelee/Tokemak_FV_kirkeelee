@@ -18,14 +18,17 @@ import { ICurveV2Swap } from "src/interfaces/external/curve/ICurveV2Swap.sol";
 contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, ISpotPriceOracle {
     uint256 public constant FEE_PRECISION = 1e10;
     address public constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+<<<<<<< HEAD
 
+=======
+>>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
     ICurveResolver public immutable curveResolver;
 
     /**
-     * @notice Struct for neccessary information for single Curve pool.
+     * @notice Struct for necessary information for single Curve pool.
      * @param pool The address of the curve pool.
      * @param checkReentrancy uint8 representing a boolean.  0 for false, 1 for true.
-     * @param tokentoPrice Address of the token being priced in the Curve pool.
+     * @param tokenToPrice Address of the token being priced in the Curve pool.
      * @param tokenFromPrice Address of the token being used to price the token in the Curve pool.
      */
     struct PoolData {
@@ -61,12 +64,6 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
     error ResolverMismatch(address providedLP, address queriedLP);
 
     /**
-     * @notice Thrown when a Curve V2 Lp token is already registered.
-     * @param curveLpToken The address of the token attempted to be deployed.
-     */
-    error AlreadyRegistered(address curveLpToken);
-
-    /**
      * @notice Thrown when lp token is not registered.
      * @param curveLpToken Address of token expected to be registered.
      */
@@ -85,6 +82,9 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
 
     /// @notice Reverse mapping of LP token to pool info.
     mapping(address => PoolData) public lpTokenToPool;
+
+    /// @notice Mapping of pool address to it's LP token.
+    mapping(address => address) public poolToLpToken;
 
     /**
      * @param _systemRegistry Instance of system registry for this version of the system.
@@ -115,7 +115,9 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
     function registerPool(address curvePool, address curveLpToken, bool checkReentrancy) external onlyOwner {
         Errors.verifyNotZero(curvePool, "curvePool");
         Errors.verifyNotZero(curveLpToken, "curveLpToken");
-        if (lpTokenToPool[curveLpToken].pool != address(0)) revert AlreadyRegistered(curveLpToken);
+        if (lpTokenToPool[curveLpToken].pool != address(0) || poolToLpToken[curvePool] != address(0)) {
+            revert Errors.AlreadyRegistered(curvePool);
+        }
 
         (address[8] memory tokens, uint256 numTokens, address lpToken, bool isStableSwap) =
             curveResolver.resolveWithLpToken(curvePool);
@@ -124,6 +126,8 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         if (numTokens != 2) revert InvalidNumTokens(numTokens);
         if (isStableSwap) revert NotCryptoPool(curvePool);
         if (lpToken != curveLpToken) revert ResolverMismatch(curveLpToken, lpToken);
+
+        poolToLpToken[curvePool] = curveLpToken;
 
         /**
          * Curve V2 pools always price second token in `coins` array in first token in `coins` array.  This means that
@@ -146,8 +150,13 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
     function unregister(address curveLpToken) external onlyOwner {
         Errors.verifyNotZero(curveLpToken, "curveLpToken");
 
-        if (lpTokenToPool[curveLpToken].pool == address(0)) revert NotRegistered(curveLpToken);
+        address curvePool = lpTokenToPool[curveLpToken].pool;
 
+        if (curvePool == address(0)) revert NotRegistered(curveLpToken);
+
+        // Remove LP token from pool mapping
+        delete poolToLpToken[curvePool];
+        // Remove pool from LP token mapping
         delete lpTokenToPool[curveLpToken];
 
         emit TokenUnregistered(curveLpToken);
@@ -209,7 +218,17 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
     ) public view returns (uint256 price, address actualQuoteToken) {
         Errors.verifyNotZero(pool, "pool");
 
-        address lpToken = curveResolver.getLpToken(pool);
+        address lpToken = poolToLpToken[pool];
+        if (lpToken == address(0)) revert NotRegistered(pool);
+
+        (price, actualQuoteToken) = _getSpotPrice(token, pool, lpToken);
+    }
+
+    function _getSpotPrice(
+        address token,
+        address pool,
+        address lpToken
+    ) internal view returns (uint256 price, address actualQuoteToken) {
         uint256 tokenIndex = 0;
         uint256 quoteTokenIndex = 0;
 
@@ -232,5 +251,41 @@ contract CurveV2CryptoEthOracle is SystemComponent, SecurityBase, IPriceOracle, 
         price = (dy * FEE_PRECISION) / (FEE_PRECISION - fee);
 
         actualQuoteToken = quoteTokenIndex == 0 ? poolInfo.tokenFromPrice : poolInfo.tokenToPrice;
+    }
+
+    /// @inheritdoc ISpotPriceOracle
+    function getSafeSpotPriceInfo(
+        address pool,
+        address lpToken,
+        address
+    ) external view returns (uint256 totalLPSupply, ReserveItemInfo[] memory reserves) {
+        Errors.verifyNotZero(pool, "pool");
+        Errors.verifyNotZero(lpToken, "lpToken");
+
+        totalLPSupply = IERC20Metadata(lpToken).totalSupply();
+
+        PoolData storage tokens = lpTokenToPool[lpToken];
+        if (tokens.pool == address(0)) {
+            revert NotRegistered(lpToken);
+        }
+
+        reserves = new ReserveItemInfo[](2); // This contract only allows CurveV2 pools with two tokens
+        uint256[8] memory balances = curveResolver.getReservesInfo(pool);
+
+        (uint256 rawSpotPrice, address actualQuoteToken) = _getSpotPrice(tokens.tokenFromPrice, pool, lpToken);
+        reserves[0] = ReserveItemInfo({
+            token: tokens.tokenFromPrice,
+            reserveAmount: balances[0],
+            rawSpotPrice: rawSpotPrice,
+            actualQuoteToken: actualQuoteToken
+        });
+
+        (rawSpotPrice, actualQuoteToken) = _getSpotPrice(tokens.tokenToPrice, pool, lpToken);
+        reserves[1] = ReserveItemInfo({
+            token: tokens.tokenToPrice,
+            reserveAmount: balances[1],
+            rawSpotPrice: rawSpotPrice,
+            actualQuoteToken: actualQuoteToken
+        });
     }
 }

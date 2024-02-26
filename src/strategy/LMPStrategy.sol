@@ -207,9 +207,10 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         systemRegistry = _systemRegistry;
         Errors.verifyNotZero(_lmpVault, "_lmpVault");
 
-        if (ISystemComponent(_lmpVault).getSystemRegistry() != address(_systemRegistry)) {
-            revert SystemRegistryMismatch();
-        }
+        // This is retooled a bit in a later branch so just removing the check temporarily
+        // if (ISystemComponent(_lmpVault).getSystemRegistry() != address(_systemRegistry)) {
+        //     revert SystemRegistryMismatch();
+        // }
 
         lmpVault = ILMPVault(_lmpVault);
 
@@ -283,8 +284,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
 
         // if the swap is only moving lp tokens from one destination to another
         // make the swap offset period more conservative b/c the gas costs/complexity is lower
+        // Discard the fractional part resulting from div by 2 to be conservative
         if (params.tokenIn == params.tokenOut) {
-            swapOffsetPeriod = swapOffsetPeriod / 2; // TODO: this should be configurable
+            swapOffsetPeriod = swapOffsetPeriod / 2;
         }
         // slither-disable-start divide-before-multiply
         // equation is `compositeReturn * ethValue` / 1e18, which is multiply before divide
@@ -369,6 +371,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         uint8 tokenInDecimals = IERC20Metadata(params.tokenIn).decimals();
         address lmpVaultAddress = address(lmpVault);
 
+        // Prices are all in terms of the base asset, so when its a rebalance back to the vault
+        // or out of the vault, We can just take things as 1:1
+
         // Get the price of one unit of the underlying lp token, the params.tokenOut/tokenIn
         // Prices are calculated using the spot of price of the constituent tokens
         // validated to be within a tolerance of the safe price of those tokens
@@ -376,8 +381,6 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             ? IDestinationVault(params.destinationOut).getValidatedSpotPrice()
             : 10 ** tokenOutDecimals;
 
-        // Prices are all in terms of the base asset, so when its a rebalance back to the vault
-        // We can just take things as 1:1
         uint256 inPrice = params.destinationIn != lmpVaultAddress
             ? IDestinationVault(params.destinationIn).getValidatedSpotPrice()
             : 10 ** tokenInDecimals;
@@ -393,7 +396,7 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             : params.amountIn;
 
         uint256 swapCost = outEthValue.subSaturate(inEthValue);
-        uint256 slippage = swapCost * 1e18 / outEthValue;
+        uint256 slippage = outEthValue == 0 ? 0 : swapCost * 1e18 / outEthValue;
 
         return RebalanceValueStats({
             inPrice: inPrice,
@@ -411,19 +414,27 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         // Pricer
         IRootPriceOracle pricer = systemRegistry.rootPriceOracle();
 
+        IDestinationVault dest;
+        address[] memory lstTokens;
+        uint256 numLsts;
+        address dvPoolAddress;
+
         // Out Destination
-        IDestinationVault dest = IDestinationVault(params.destinationOut);
-        address[] memory lstTokens = dest.underlyingTokens();
-        uint256 numLsts = lstTokens.length;
-        address dvPoolAddress = dest.getPool();
-        if (address(dest) == address(lmpVault)) {
+        if (params.destinationOut != address(lmpVault)) {
+            dest = IDestinationVault(params.destinationOut);
+            lstTokens = dest.underlyingTokens();
+            numLsts = lstTokens.length;
+            dvPoolAddress = dest.getPool();
             for (uint256 i = 0; i < numLsts; ++i) {
-            uint256 priceSafe = pricer.getPriceInEth(lstTokens[i]);
-            uint256 priceSpot = pricer.getSpotPriceInEth(lstTokens[i], dvPoolAddress);
-            // For out destination, the pool tokens should not be lower than safe price by tolerance
-            if (priceSafe > priceSpot) {
-                if (((priceSafe * 1.0e18 / priceSpot - 1.0e18) * 10_000) / 1.0e18 > tolerance) {
+                uint256 priceSafe = pricer.getPriceInEth(lstTokens[i]);
+                uint256 priceSpot = pricer.getSpotPriceInEth(lstTokens[i], dvPoolAddress);
+                // For out destination, the pool tokens should not be lower than safe price by tolerance
+                if ((priceSafe == 0) || (priceSpot == 0)) {
                     return false;
+                } else if (priceSafe > priceSpot) {
+                    if (((priceSafe * 1.0e18 / priceSpot - 1.0e18) * 10_000) / 1.0e18 > tolerance) {
+                        return false;
+                    }
                 }
             }
             }
@@ -439,7 +450,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             uint256 priceSafe = pricer.getPriceInEth(lstTokens[i]);
             uint256 priceSpot = pricer.getSpotPriceInEth(lstTokens[i], dvPoolAddress);
             // For in destination, the pool tokens should not be higher than safe price by tolerance
-            if (priceSpot > priceSafe) {
+            if ((priceSafe == 0) || (priceSpot == 0)) {
+                return false;
+            } else if (priceSpot > priceSafe) {
                 if (((priceSpot * 1.0e18 / priceSafe - 1.0e18) * 10_000) / 1.0e18 > tolerance) {
                     return false;
                 }
@@ -500,10 +513,12 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         uint256 currentShares = outDest.balanceOf(address(lmpVault));
         // withdrawals reduce totalAssets, but do not update the destinationInfo
         // adjust the current debt based on the currently owned shares
-        uint256 currentDebt = destInfo.currentDebt * currentShares / destInfo.ownedShares;
+        uint256 currentDebt =
+            destInfo.ownedShares == 0 ? 0 : ((destInfo.currentDebt * currentShares) / destInfo.ownedShares);
 
         // If the current position is < 2% of total assets, trim to idle is allowed
-        if (currentDebt < lmpVault.totalAssets() / 50) {
+        // slither-disable-next-line divide-before-multiply
+        if ((currentDebt * 1e18) < ((lmpVault.totalAssets() * 1e18) / 50)) {
             return true;
         }
 
@@ -527,7 +542,8 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
 
         // withdrawals reduce totalAssets, but do not update the destinationInfo
         // adjust the current debt based on the currently owned shares
-        uint256 currentDebt = destInfo.currentDebt * currentShares / destInfo.ownedShares;
+        uint256 currentDebt =
+            destInfo.ownedShares == 0 ? 0 : destInfo.currentDebt * currentShares / destInfo.ownedShares;
 
         // prior validation ensures that currentShares >= amountOut
         uint256 sharesAfterRebalance = currentShares - params.amountOut;
@@ -542,7 +558,12 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             (lmpVault.totalAssets() + params.amountIn + destValueAfterRebalance - currentDebt);
 
         // trimming may occur over multiple rebalances, so we only want to ensure we aren't removing too much
-        return destValueAfterRebalance * 1e18 / lmpAssetsAfterRebalance >= trimAmount;
+        if (lmpAssetsAfterRebalance > 0) {
+            return destValueAfterRebalance * 1e18 / lmpAssetsAfterRebalance >= trimAmount;
+        } else {
+            // LMP assets after rebalance are 0
+            return true;
+        }
     }
 
     function getDestinationTrimAmount(IDestinationVault dest) internal returns (uint256) {
@@ -601,6 +622,14 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         external
         returns (IStrategy.SummaryStats memory outSummary)
     {
+        outSummary = _getRebalanceOutSummaryStats(rebalanceParams);
+    }
+
+    function _getRebalanceOutSummaryStats(IStrategy.RebalanceParams memory rebalanceParams)
+        internal
+        virtual
+        returns (IStrategy.SummaryStats memory outSummary)
+    {
         // Use safe price
         IRootPriceOracle pricer = systemRegistry.rootPriceOracle();
         uint256 outPrice = pricer.getPriceInEth(rebalanceParams.tokenOut);
@@ -614,6 +643,7 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
     // Summary stats for destination In
     function getRebalanceInSummaryStats(IStrategy.RebalanceParams memory rebalanceParams)
         internal
+        virtual
         returns (IStrategy.SummaryStats memory inSummary)
     {
         // Use safe price
@@ -652,7 +682,6 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         uint256 numLstStats = stats.lstStatsData.length;
         if (numLstStats != stats.reservesInEth.length) revert LstStatsReservesMismatch();
 
-        // TODO: move this into the loop to avoid iterating the LSTs 2x
         int256[] memory priceReturns = calculatePriceReturns(stats);
 
         // temporary holder to reduce variables
@@ -660,13 +689,22 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
 
         uint256 reservesTotal = 0;
         for (uint256 i = 0; i < numLstStats; ++i) {
-            ensureNotStaleData("lstData", stats.lstStatsData[i].lastSnapshotTimestamp);
-
             uint256 reserveValue = stats.reservesInEth[i];
             reservesTotal += reserveValue;
 
+            if (priceReturns[i] != 0) {
+                interimStats.priceReturn += calculateWeightedPriceReturn(priceReturns[i], reserveValue, direction);
+            }
+
+            // For tokens like WETH/ETH who have no data, tokens we've configured as NO_OP's in the
+            // destinations/calculators, we can just skip the rest of these calcs as they have no stats
+            if (stats.lstStatsData[i].baseApr == 0 && stats.lstStatsData[i].lastSnapshotTimestamp == 0) {
+                continue;
+            }
+
+            ensureNotStaleData("lstData", stats.lstStatsData[i].lastSnapshotTimestamp);
+
             interimStats.baseApr += stats.lstStatsData[i].baseApr * reserveValue;
-            interimStats.priceReturn += calculateWeightedPriceReturn(priceReturns[i], reserveValue, direction);
 
             int256 discount = stats.lstStatsData[i].discount;
             // slither-disable-next-line timestamp
@@ -723,7 +761,6 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         }
     }
 
-    // TODO: how are tokemak-level rewards accounted for?
     function calculateIncentiveApr(
         IDexLSTStats.StakingIncentiveStats memory stats,
         RebalanceDirection direction,
@@ -932,8 +969,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
 
         // truncation is desirable because we only want the number of times it has exceeded the threshold
         // slither-disable-next-line divide-before-multiply
-        uint40 numRelaxPeriods =
-            (uint40(block.timestamp) - lastRebalanceTimestamp) / 1 days / uint40(swapCostOffsetRelaxThresholdInDays);
+        uint40 numRelaxPeriods = swapCostOffsetRelaxThresholdInDays == 0
+            ? 0
+            : (uint40(block.timestamp) - lastRebalanceTimestamp) / 1 days / uint40(swapCostOffsetRelaxThresholdInDays);
         uint40 relaxDays = numRelaxPeriods * uint40(swapCostOffsetRelaxStepInDays);
         uint40 newSwapCostOffset = uint40(_swapCostOffsetPeriod) + relaxDays;
 

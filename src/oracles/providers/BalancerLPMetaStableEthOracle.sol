@@ -17,7 +17,6 @@ import { BalancerBaseOracle } from "src/oracles/providers/base/BalancerBaseOracl
 /// @dev getPriceEth is not a view fn to support reentrancy checks. Dont actually change state.
 contract BalancerLPMetaStableEthOracle is BalancerBaseOracle, IPriceOracle {
     error InvalidTokenCount(address token, uint256 length);
-    error InvalidPool(address token);
 
     constructor(
         ISystemRegistry _systemRegistry,
@@ -68,4 +67,17 @@ contract BalancerLPMetaStableEthOracle is BalancerBaseOracle, IPriceOracle {
     }
     // slither-disable-end low-level-calls
     // slither-disable-end missing-zero-check
+
+    function getTotalSupply_(address lpToken) internal virtual override returns (uint256 totalSupply) {
+        totalSupply = IERC20(lpToken).totalSupply();
+    }
+
+    function getPoolTokens_(address pool)
+        internal
+        virtual
+        override
+        returns (IERC20[] memory tokens, uint256[] memory balances)
+    {
+        (tokens, balances) = BalancerUtilities._getPoolTokens(balancerVault, pool);
+    }
 }

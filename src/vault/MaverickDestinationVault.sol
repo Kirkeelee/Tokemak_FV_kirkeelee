@@ -14,6 +14,7 @@ import { IPoolPositionSlim } from "src/interfaces/external/maverick/IPoolPositio
 import { MaverickStakingAdapter } from "src/destinations/adapters/staking/MaverickStakingAdapter.sol";
 import { MaverickRewardsAdapter } from "src/destinations/adapters/rewards/MaverickRewardsAdapter.sol";
 import { IERC20Metadata as IERC20 } from "openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { IncentiveCalculatorBase } from "src/stats/calculators/base/IncentiveCalculatorBase.sol";
 
 contract MaverickDestinationVault is DestinationVault {
     error NothingToClaim();
@@ -60,12 +61,13 @@ contract MaverickDestinationVault is DestinationVault {
         IERC20 baseAsset_,
         IERC20 underlyer_,
         IMainRewarder rewarder_,
+        address incentiveCalculator_,
         address[] memory additionalTrackedTokens_,
         bytes memory params_
     ) public virtual override {
         // Base class has the initializer() modifier to prevent double-setup
         // If you don't call the base initialize, make sure you protect this call
-        super.initialize(baseAsset_, underlyer_, rewarder_, additionalTrackedTokens_, params_);
+        super.initialize(baseAsset_, underlyer_, rewarder_, incentiveCalculator_, additionalTrackedTokens_, params_);
 
         // Decode the init params, validate, and save off
         InitParams memory initParams = abi.decode(params_, (InitParams));
@@ -170,5 +172,11 @@ contract MaverickDestinationVault is DestinationVault {
     /// @inheritdoc DestinationVault
     function getPool() external view override returns (address) {
         return address(maverickPool);
+    }
+
+    function _validateCalculator(address incentiveCalculator) internal view override {
+        if (IncentiveCalculatorBase(incentiveCalculator).resolveLpToken() != _underlying) {
+            revert InvalidIncentiveCalculator();
+        }
     }
 }

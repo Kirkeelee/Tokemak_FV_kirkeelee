@@ -3,20 +3,32 @@
 pragma solidity 0.8.17;
 
 import { IERC20, SafeERC20, Address } from "openzeppelin-contracts/token/ERC20/utils/SafeERC20.sol";
-import { ILMPVault, ILMPVaultRouterBase } from "src/interfaces/vault/ILMPVaultRouterBase.sol";
+import { ILMPVault, ILMPVaultRouterBase, IMainRewarder } from "src/interfaces/vault/ILMPVaultRouterBase.sol";
+import { ISystemRegistry } from "src/interfaces/ISystemRegistry.sol";
 
 import { LibAdapter } from "src/libs/LibAdapter.sol";
 import { SelfPermit } from "src/utils/SelfPermit.sol";
 import { PeripheryPayments } from "src/utils/PeripheryPayments.sol";
 import { Multicall } from "src/utils/Multicall.sol";
+import { Errors } from "src/utils/Errors.sol";
+import { SystemComponent } from "src/SystemComponent.sol";
 
 import { IWETH9 } from "src/interfaces/utils/IWETH9.sol";
 
 /// @title LMPVault Router Base Contract
-abstract contract LMPVaultRouterBase is ILMPVaultRouterBase, SelfPermit, Multicall, PeripheryPayments {
+abstract contract LMPVaultRouterBase is
+    ILMPVaultRouterBase,
+    SelfPermit,
+    Multicall,
+    PeripheryPayments,
+    SystemComponent
+{
     using SafeERC20 for IERC20;
 
-    constructor(address _weth9) PeripheryPayments(IWETH9(_weth9)) { }
+    constructor(
+        address _weth9,
+        ISystemRegistry _systemRegistry
+    ) PeripheryPayments(IWETH9(_weth9)) SystemComponent(_systemRegistry) { }
 
     /// @inheritdoc ILMPVaultRouterBase
     function mint(
@@ -117,6 +129,52 @@ abstract contract LMPVaultRouterBase is ILMPVaultRouterBase, SelfPermit, Multica
         }
     }
 
+    /// @inheritdoc ILMPVaultRouterBase
+    function stakeVaultToken(IERC20 vault, uint256 maxAmount) external returns (uint256) {
+        _checkVault(address(vault));
+        IMainRewarder lmpRewarder = ILMPVault(address(vault)).rewarder();
+
+        uint256 userBalance = vault.balanceOf(msg.sender);
+        if (userBalance < maxAmount) {
+            maxAmount = userBalance;
+        }
+        pullToken(vault, maxAmount, address(this));
+        approve(vault, address(lmpRewarder), maxAmount);
+
+        lmpRewarder.stake(msg.sender, maxAmount);
+
+        return maxAmount;
+    }
+
+    /// @inheritdoc ILMPVaultRouterBase
+    function withdrawVaultToken(
+        ILMPVault vault,
+        IMainRewarder rewarder,
+        uint256 maxAmount,
+        bool claim
+    ) external returns (uint256) {
+        _checkVault(address(vault));
+        _checkRewarder(vault, address(rewarder));
+
+        uint256 userRewardBalance = rewarder.balanceOf(msg.sender);
+        if (maxAmount > userRewardBalance) {
+            maxAmount = userRewardBalance;
+        }
+
+        rewarder.withdraw(msg.sender, maxAmount, claim);
+
+        return maxAmount;
+    }
+
+    /// @inheritdoc ILMPVaultRouterBase
+    function claimRewards(ILMPVault vault, IMainRewarder rewarder) external {
+        _checkVault(address(vault));
+        _checkRewarder(vault, address(rewarder));
+
+        // Always claims any extra rewards that exist.
+        rewarder.getReward(msg.sender, true);
+    }
+
     ///@dev Function assumes that vault.asset() is verified externally to be weth9
     function _processEthIn(uint256 amount) internal {
         if (amount > 0) {
@@ -131,6 +189,19 @@ abstract contract LMPVaultRouterBase is ILMPVaultRouterBase, SelfPermit, Multica
         if (balanceWETH9 > 0) {
             weth9.withdraw(balanceWETH9);
             Address.sendValue(payable(to), balanceWETH9);
+        }
+    }
+
+    // Helper function for repeat functionalities.
+    function _checkVault(address vault) internal view {
+        if (!systemRegistry.lmpVaultRegistry().isVault(vault)) {
+            revert Errors.ItemNotFound();
+        }
+    }
+
+    function _checkRewarder(ILMPVault vault, address rewarder) internal view {
+        if (rewarder != address(vault.rewarder()) && !vault.isPastRewarder(rewarder)) {
+            revert Errors.ItemNotFound();
         }
     }
 }

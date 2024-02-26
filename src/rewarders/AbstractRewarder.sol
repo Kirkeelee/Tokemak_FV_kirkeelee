@@ -22,7 +22,6 @@ import { Errors } from "src/utils/Errors.sol";
  * tracking user rewards, and handling stake-related operations.
  * Inherited by rewarder contracts, such as MainRewarder and ExtraRewarder.
  * The contract is inspired by the Convex contract but uses block-based duration instead of timestamp-based duration.
- * Unlike Convex, it does not own the LP token but it interacts with an external LP token contract.
  */
 abstract contract AbstractRewarder is IBaseRewarder, SecurityBase {
     using SafeERC20 for IERC20;
@@ -359,7 +358,7 @@ abstract contract AbstractRewarder is IBaseRewarder, SecurityBase {
      *      - Enhancing system monitoring capabilities through emitted events.
      * @param amount The amount to be withdrawn.
      */
-    function _withdraw(address account, uint256 amount) internal {
+    function _withdrawAbstractRewarder(address account, uint256 amount) internal {
         Errors.verifyNotZero(account, "account");
         Errors.verifyNotZero(amount, "amount");
 
@@ -375,7 +374,7 @@ abstract contract AbstractRewarder is IBaseRewarder, SecurityBase {
      * @param account The address of the user to handle staking.
      * @param amount The amount to be staked.
      */
-    function _stake(address account, uint256 amount) internal {
+    function _stakeAbstractRewarder(address account, uint256 amount) internal {
         Errors.verifyNotZero(account, "account");
         Errors.verifyNotZero(amount, "amount");
 

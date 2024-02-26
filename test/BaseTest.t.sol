@@ -15,6 +15,7 @@ import { ILMPVaultFactory, LMPVaultFactory } from "src/vault/LMPVaultFactory.sol
 import { IDestinationVaultRegistry, DestinationVaultRegistry } from "src/vault/DestinationVaultRegistry.sol";
 import { IDestinationVaultFactory, DestinationVaultFactory } from "src/vault/DestinationVaultFactory.sol";
 import { TestDestinationVault } from "test/mocks/TestDestinationVault.sol";
+import { TestIncentiveCalculator } from "test/mocks/TestIncentiveCalculator.sol";
 import { IAccessController, AccessController } from "src/security/AccessController.sol";
 import { StakeTrackingMock } from "test/mocks/StakeTrackingMock.sol";
 import { SystemSecurity } from "src/security/SystemSecurity.sol";
@@ -43,6 +44,7 @@ contract BaseTest is Test {
     DestinationVaultRegistry public destinationVaultRegistry;
     DestinationVaultFactory public destinationVaultFactory;
 
+    TestIncentiveCalculator public testIncentiveCalculator;
     TestDestinationVault public defaultDestinationVault;
 
     IAccessController public accessController;
@@ -160,6 +162,7 @@ contract BaseTest is Test {
         return createMainRewarder(asset, address(new StakeTrackingMock()), allowExtras);
     }
 
+    // solhint-disable-next-line no-unused-vars
     function createMainRewarder(address asset, address lmpVault, bool allowExtras) public returns (MainRewarder) {
         // We use mock since this function is called not from owner and
         // SystemRegistry.addRewardToken is not accessible from the ownership perspective
@@ -169,11 +172,11 @@ contract BaseTest is Test {
         MainRewarder mainRewarder = MainRewarder(
             new LMPVaultMainRewarder(
                 systemRegistry, // registry
-                lmpVault, // stakeTracker
-                asset, // address(mockAsset("MAIN_REWARD", "MAIN_REWARD", 0)), // rewardToken
+                asset,
                 800, // newRewardRatio
                 100, // durationInBlock
-                allowExtras
+                allowExtras,
+                lmpVault
             )
         );
         vm.label(address(mainRewarder), "Main Rewarder");

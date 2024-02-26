@@ -16,6 +16,10 @@ import { SecurityBase } from "src/security/SecurityBase.sol";
 import { SystemComponent } from "src/SystemComponent.sol";
 import { IPoolInformation } from "src/interfaces/external/maverick/IPoolInformation.sol";
 
+<<<<<<< HEAD
+=======
+//slither-disable-start similar-names
+>>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
 contract MavEthOracle is SystemComponent, IPriceOracle, SecurityBase, ISpotPriceOracle {
     /// @notice Emitted when new maximum bin width is set.
     event MaxTotalBinWidthSet(uint256 newMaxBinWidth);
@@ -74,10 +78,7 @@ contract MavEthOracle is SystemComponent, IPriceOracle, SecurityBase, ISpotPrice
 
         Errors.verifyNotZero(address(pool), "pool");
 
-        // Check that total width of all bins in position does not exceed what we deem safe.
-        if (pool.tickSpacing() * boostedPosition.allBinIds().length > maxTotalBinWidth) {
-            revert TotalBinWidthExceedsMax();
-        }
+        _checkSafeWidth(pool, boostedPosition);
 
         // Get reserves in boosted position.
         (uint256 reserveTokenA, uint256 reserveTokenB) = boostedPosition.getReserves();
@@ -101,13 +102,20 @@ contract MavEthOracle is SystemComponent, IPriceOracle, SecurityBase, ISpotPrice
     }
 
     /// @inheritdoc ISpotPriceOracle
+<<<<<<< HEAD
     /// @dev This function gets price using Maverick's `PoolInformation` contract.
+=======
+>>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
     function getSpotPrice(
         address token,
         address poolAddress,
         address
     ) public returns (uint256 price, address actualQuoteToken) {
         Errors.verifyNotZero(poolAddress, "poolAddress");
+<<<<<<< HEAD
+=======
+
+>>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
         IPool pool = IPool(poolAddress);
 
         address tokenA = address(pool.tokenA());
@@ -122,6 +130,27 @@ contract MavEthOracle is SystemComponent, IPriceOracle, SecurityBase, ISpotPrice
         // Validate if the input token is either tokenA or tokenB
         if (!isTokenA && token != tokenB) revert InvalidToken();
 
+<<<<<<< HEAD
+=======
+        price = _getSpotPrice(token, pool, isTokenA);
+    }
+
+    /// @inheritdoc ISpotPriceOracle
+    function getSafeSpotPriceInfo(
+        // solhint-disable-next-line no-unused-vars
+        address pool,
+        // solhint-disable-next-line no-unused-vars
+        address _boostedPosition,
+        address // we omit quoteToken as we get pricing info from the pool.
+            // It's aligned with the requested quoteToken in RootPriceOracle.getRangePricesLP
+            // solhint-disable-next-line no-unused-vars
+    ) external returns (uint256 totalLPSupply, ISpotPriceOracle.ReserveItemInfo[] memory reserves) {
+        revert Errors.NotImplemented(); // Postponed until we have Maverick added to the system.
+    }
+
+    /// @dev This function gets price using Maverick's `PoolInformation` contract
+    function _getSpotPrice(address token, IPool pool, bool isTokenA) private returns (uint256 price) {
+>>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
         price = poolInformation.calculateSwap(
             pool,
             uint128(10 ** IERC20Metadata(token).decimals()), // amount
@@ -134,4 +163,15 @@ contract MavEthOracle is SystemComponent, IPriceOracle, SecurityBase, ISpotPrice
         // https://docs.mav.xyz/guides/technical-reference/pool#fn-fee
         price = (price * 1e18) / (1e18 - pool.fee());
     }
+<<<<<<< HEAD
+=======
+
+    ///@dev Check that total width of all bins in position does not exceed what we deem safe
+    function _checkSafeWidth(IPool pool, IPoolPositionDynamicSlim boostedPosition) private {
+        if (pool.tickSpacing() * boostedPosition.allBinIds().length > maxTotalBinWidth) {
+            revert TotalBinWidthExceedsMax();
+        }
+    }
+>>>>>>> 25479c35fa4a5ca88030299eb69e06ebfa8f97c6
 }
+//slither-disable-end similar-names

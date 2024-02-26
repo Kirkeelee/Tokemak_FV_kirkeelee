@@ -9,36 +9,24 @@ import { IVault } from "src/interfaces/external/balancer/IVault.sol";
 import { ISystemRegistry } from "src/interfaces/ISystemRegistry.sol";
 import { IERC20 } from "openzeppelin-contracts/token/ERC20/IERC20.sol";
 import { IMainRewarder } from "src/interfaces/rewarders/IMainRewarder.sol";
-import { AuraStaking } from "src/destinations/adapters/staking/AuraAdapter.sol";
-import { IConvexBooster } from "src/interfaces/external/convex/IConvexBooster.sol";
 import { IBalancerPool } from "src/interfaces/external/balancer/IBalancerPool.sol";
-import { AuraRewards } from "src/destinations/adapters/rewards/AuraRewardsAdapter.sol";
 import { BalancerBeethovenAdapter } from "src/destinations/adapters/BalancerBeethovenAdapter.sol";
 import { IERC20Metadata } from "openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import { IBalancerComposableStablePool } from "src/interfaces/external/balancer/IBalancerComposableStablePool.sol";
-import { IncentiveCalculatorBase } from "src/stats/calculators/base/IncentiveCalculatorBase.sol";
+import { BalancerStablePoolCalculatorBase } from "src/stats/calculators/base/BalancerStablePoolCalculatorBase.sol";
 
-/// @title Destination Vault to proxy a Balancer Pool that goes into Aura
-contract BalancerAuraDestinationVault is DestinationVault {
+/// @title Destination Vault to proxy a Balancer Pool that holds the LP asset
+contract BalancerDestinationVault is DestinationVault {
     /// @notice Only used to initialize the vault
     struct InitParams {
         /// @notice Pool and LP token this vault proxies
         address balancerPool;
-        /// @notice Aura reward contract
-        address auraStaking;
-        /// @notice Aura Booster contract
-        address auraBooster;
-        /// @notice Numeric pool id used to reference Balancer pool
-        uint256 auraPoolId;
     }
 
     string internal constant EXCHANGE_NAME = "balancer";
 
     /// @notice Balancer Vault
     IVault public immutable balancerVault;
-
-    /// @notice Token minted during reward claiming. Specific to Convex-style rewards. Aura in this case.
-    address public immutable defaultRewardToken;
 
     /// @notice Pool tokens changed – possible for Balancer pools with no liquidity
     error PoolTokensChanged(IERC20[] cachedTokens, IERC20[] actualTokens);
@@ -47,36 +35,20 @@ contract BalancerAuraDestinationVault is DestinationVault {
     /* State Variables                  */
     /* ******************************** */
 
-    IERC20[] internal poolTokens;
+    address[] internal poolTokens;
 
     /// @notice Pool and LP token this vault proxies
     address public balancerPool;
 
-    /// @notice Aura reward contract
-    address public auraStaking;
-
-    /// @notice Aura Booster contract
-    address public auraBooster;
-
-    /// @notice Numeric pool id used to reference balancer pool
-    uint256 public auraPoolId;
-
     /// @notice Whether the balancePool is a ComposableStable pool. false -> MetaStable
     bool public isComposable;
 
-    constructor(
-        ISystemRegistry sysRegistry,
-        address _balancerVault,
-        address _defaultStakingRewardToken
-    ) DestinationVault(sysRegistry) {
+    constructor(ISystemRegistry sysRegistry, address _balancerVault) DestinationVault(sysRegistry) {
         Errors.verifyNotZero(_balancerVault, "_balancerVault");
-        Errors.verifyNotZero(_defaultStakingRewardToken, "_defaultStakingRewardToken");
 
-        // Both are checked above
+        // Checked above
         // slither-disable-next-line missing-zero-check
         balancerVault = IVault(_balancerVault);
-        // slither-disable-next-line missing-zero-check
-        defaultRewardToken = _defaultStakingRewardToken;
     }
 
     /// @inheritdoc DestinationVault
@@ -95,43 +67,38 @@ contract BalancerAuraDestinationVault is DestinationVault {
         // Decode the init params, validate, and save off
         InitParams memory initParams = abi.decode(params_, (InitParams));
         Errors.verifyNotZero(initParams.balancerPool, "balancerPool");
-        Errors.verifyNotZero(initParams.auraStaking, "auraStaking");
-        Errors.verifyNotZero(initParams.auraBooster, "auraBooster");
-        Errors.verifyNotZero(initParams.auraPoolId, "auraPoolId");
 
         balancerPool = initParams.balancerPool;
-        auraStaking = initParams.auraStaking;
-        auraBooster = initParams.auraBooster;
-        auraPoolId = initParams.auraPoolId;
         isComposable = BalancerUtilities.isComposablePool(initParams.balancerPool);
 
         // Tokens that are used by the proxied pool cannot be removed from the vault
         // via recover(). Make sure we track those tokens here.
         // slither-disable-next-line unused-return
-        (poolTokens,) = BalancerUtilities._getPoolTokens(balancerVault, balancerPool);
-        if (poolTokens.length == 0) revert ArrayLengthMismatch();
+        (IERC20[] memory _poolTokens,) = BalancerUtilities._getPoolTokens(balancerVault, balancerPool);
+        if (_poolTokens.length == 0) revert ArrayLengthMismatch();
 
+        poolTokens = BalancerUtilities._convertERC20sToAddresses(_poolTokens);
         for (uint256 i = 0; i < poolTokens.length; ++i) {
-            _addTrackedToken(address(poolTokens[i]));
+            _addTrackedToken(poolTokens[i]);
         }
     }
 
     /// @inheritdoc DestinationVault
-    /// @notice In this vault all underlyer should be staked externally, so internal debt should be 0.
-    function internalDebtBalance() public pure override returns (uint256) {
-        return 0;
-    }
-
-    /// @inheritdoc DestinationVault
-    /// @notice In this vault all underlyer should be staked, and mint is 1:1, so external debt is `totalSupply()`.
-    function externalDebtBalance() public view override returns (uint256) {
+    /// @notice In this vault no underlyer should be staked externally, so external debt should be 0.
+    function internalDebtBalance() public view override returns (uint256) {
         return totalSupply();
     }
 
-    /// @notice Get the balance of underlyer currently staked in Aura
-    /// @return Balance of underlyer currently staked in Aura
-    function externalQueriedBalance() public view override returns (uint256) {
-        return IERC20(auraStaking).balanceOf(address(this));
+    /// @inheritdoc DestinationVault
+    /// @notice In this vault no underlyer should be staked.
+    function externalDebtBalance() public pure override returns (uint256) {
+        return 0;
+    }
+
+    /// @notice Get the balance of underlyer currently staked outside the Vault
+    /// @return Return 0 as no LP token is deployed outsie of vault
+    function externalQueriedBalance() public pure override returns (uint256) {
+        return 0;
     }
 
     /// @inheritdoc DestinationVault
@@ -142,50 +109,27 @@ contract BalancerAuraDestinationVault is DestinationVault {
     /// @inheritdoc DestinationVault
     function underlyingTokens() external view override returns (address[] memory ret) {
         if (isComposable) {
-            uint256 len = poolTokens.length;
-            ret = new address[](len - 1);
-            uint256 bptIndex = IBalancerComposableStablePool(balancerPool).getBptIndex();
-            uint256 h = 0;
-            for (uint256 i = 0; i < len; ++i) {
-                if (i != bptIndex) {
-                    ret[h] = address(poolTokens[i]);
-                    h++;
-                }
-            }
+            // slither-disable-next-line unused-return
+            (IERC20[] memory tokens,) = BalancerUtilities._getComposablePoolTokensSkipBpt(balancerVault, balancerPool);
+            ret = BalancerUtilities._convertERC20sToAddresses(tokens);
         } else {
-            ret = BalancerUtilities._convertERC20sToAddresses(poolTokens);
+            ret = poolTokens;
         }
     }
 
     /// @inheritdoc DestinationVault
     function _onDeposit(uint256 amount) internal virtual override {
-        // We should verify if pool tokens didn't change before staking to make sure we're staking for the same tokens
-        // slither-disable-next-line unused-return
-        (IERC20[] memory queriedPoolTokens,) = BalancerUtilities._getPoolTokens(balancerVault, balancerPool);
-
-        uint256 nTokens = poolTokens.length;
-        if (nTokens != queriedPoolTokens.length) {
-            revert PoolTokensChanged(poolTokens, queriedPoolTokens);
-        }
-
-        for (uint256 i = 0; i < nTokens; ++i) {
-            if (poolTokens[i] != queriedPoolTokens[i]) {
-                revert PoolTokensChanged(poolTokens, queriedPoolTokens);
-            }
-        }
-
-        // Stake LPs into Aura
-        AuraStaking.depositAndStake(IConvexBooster(auraBooster), _underlying, auraStaking, auraPoolId, amount);
+        // Accept LP tokens and do nothing
     }
 
     /// @inheritdoc DestinationVault
     function _ensureLocalUnderlyingBalance(uint256 amount) internal virtual override {
-        AuraStaking.withdrawStake(balancerPool, auraStaking, amount);
+        // Do nothing, LP balance exists
     }
 
     /// @inheritdoc DestinationVault
     function _collectRewards() internal virtual override returns (uint256[] memory amounts, address[] memory tokens) {
-        (amounts, tokens) = AuraRewards.claimRewards(auraStaking, defaultRewardToken, msg.sender, _trackedTokens);
+        // Do nothing and return empty amounts and tokens
     }
 
     /// @inheritdoc DestinationVault
@@ -199,7 +143,7 @@ contract BalancerAuraDestinationVault is DestinationVault {
         // user initiated withdrawal where they've accounted for slippage
         // at the router or otherwise
         uint256[] memory minAmounts = new uint256[](poolTokens.length);
-        tokens = BalancerUtilities._convertERC20sToAddresses(poolTokens);
+        tokens = poolTokens;
         amounts =
             BalancerBeethovenAdapter.removeLiquidity(balancerVault, balancerPool, tokens, minAmounts, underlyerAmount);
     }
@@ -210,7 +154,7 @@ contract BalancerAuraDestinationVault is DestinationVault {
     }
 
     function _validateCalculator(address incentiveCalculator) internal view override {
-        if (IncentiveCalculatorBase(incentiveCalculator).resolveLpToken() != _underlying) {
+        if (BalancerStablePoolCalculatorBase(incentiveCalculator).poolAddress() != _underlying) {
             revert InvalidIncentiveCalculator();
         }
     }

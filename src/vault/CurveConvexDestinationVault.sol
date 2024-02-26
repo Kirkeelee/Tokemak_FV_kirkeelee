@@ -15,6 +15,7 @@ import { IBaseRewardPool } from "src/interfaces/external/convex/IBaseRewardPool.
 import { ConvexRewards } from "src/destinations/adapters/rewards/ConvexRewardsAdapter.sol";
 import { CurveV2FactoryCryptoAdapter } from "src/destinations/adapters/CurveV2FactoryCryptoAdapter.sol";
 import { IERC20Metadata as IERC20 } from "openzeppelin-contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import { IncentiveCalculatorBase } from "src/stats/calculators/base/IncentiveCalculatorBase.sol";
 
 /// @notice Destination Vault to proxy a Curve Pool that goes into Convex
 /// @dev Supports Curve V1 StableSwap, Curve V2 CryptoSwap, and Curve-ng pools
@@ -93,12 +94,13 @@ contract CurveConvexDestinationVault is DestinationVault {
         IERC20 baseAsset_,
         IERC20 underlyer_,
         IMainRewarder rewarder_,
+        address incentiveCalculator_,
         address[] memory additionalTrackedTokens_,
         bytes memory params_
     ) public virtual override {
         // Base class has the initializer() modifier to prevent double-setup
         // If you don't call the base initialize, make sure you protect this call
-        super.initialize(baseAsset_, underlyer_, rewarder_, additionalTrackedTokens_, params_);
+        super.initialize(baseAsset_, underlyer_, rewarder_, incentiveCalculator_, additionalTrackedTokens_, params_);
 
         // We must configure a the curve resolver to setup the vault
         ICurveResolver curveResolver = _systemRegistry.curveResolver();
@@ -229,5 +231,11 @@ contract CurveConvexDestinationVault is DestinationVault {
     /// @inheritdoc DestinationVault
     function getPool() external view override returns (address) {
         return curvePool;
+    }
+
+    function _validateCalculator(address incentiveCalculator) internal view override {
+        if (IncentiveCalculatorBase(incentiveCalculator).resolveLpToken() != _underlying) {
+            revert InvalidIncentiveCalculator();
+        }
     }
 }

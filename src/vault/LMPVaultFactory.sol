@@ -75,11 +75,11 @@ contract LMPVaultFactory is SystemComponent, ILMPVaultFactory, SecurityBase {
 
         LMPVaultMainRewarder mainRewarder = new LMPVaultMainRewarder{ salt: salt }(
             systemRegistry,
-            newToken,
             address(systemRegistry.toke()),
             defaultRewardRatio,
             defaultRewardBlockDuration,
-            true // allowExtraRewards
+            true, // allowExtraRewards
+            newToken
         );
 
         newVaultAddress = template.cloneDeterministic(salt);

@@ -36,6 +36,7 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
     error NothingToRecover();
     error DuplicateToken(address token);
     error VaultShutdown();
+    error InvalidIncentiveCalculator();
 
     ISystemRegistry internal immutable _systemRegistry; // HARNESS: removed immutable
 
@@ -49,6 +50,8 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
 
     address internal _baseAsset;
     address internal _underlying;
+    // slither-disable-next-line similar-names
+    address internal _incentiveCalculator;
 
     IMainRewarder internal _rewarder;
 
@@ -82,12 +85,14 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
         IERC20 baseAsset_,
         IERC20 underlyer_,
         IMainRewarder rewarder_,
+        address incentiveCalculator_,
         address[] memory additionalTrackedTokens_,
         bytes memory
     ) public virtual initializer {
         Errors.verifyNotZero(address(baseAsset_), "baseAsset_");
         Errors.verifyNotZero(address(underlyer_), "underlyer_");
         Errors.verifyNotZero(address(rewarder_), "rewarder_");
+        Errors.verifyNotZero(address(incentiveCalculator_), "incentiveCalculator_");
 
         _name = string.concat("Tokemak-", baseAsset_.name(), "-", underlyer_.name());
         _symbol = string.concat("toke-", baseAsset_.symbol(), "-", underlyer_.symbol());
@@ -96,6 +101,12 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
         _baseAsset = address(baseAsset_);
         _underlying = address(underlyer_);
         _rewarder = rewarder_;
+
+        _validateCalculator(incentiveCalculator_);
+
+        // non null address verified above
+        // slither-disable-next-line missing-zero-check
+        _incentiveCalculator = incentiveCalculator_;
 
         // Setup the tracked tokens
         _addTrackedToken(address(baseAsset_));
@@ -470,8 +481,7 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
 
     /// @inheritdoc IDestinationVault
     function getStats() external virtual returns (IDexLSTStats) {
-        // TODO Implement
-        return IDexLSTStats(address(0));
+        return IDexLSTStats(_incentiveCalculator);
     }
 
     /// @inheritdoc IDestinationVault
@@ -486,4 +496,7 @@ abstract contract DestinationVault is SecurityBase, ERC20, Initializable, IDesti
 
     /// @inheritdoc IDestinationVault
     function getPool() external view virtual returns (address poolAddress);
+
+    /// @notice Validates incentive calculator for the destination vault
+    function _validateCalculator(address calculator) internal virtual;
 }
