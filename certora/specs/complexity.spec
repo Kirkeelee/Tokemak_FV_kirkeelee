@@ -1,4 +1,4 @@
-import "erc20.spec";
+
 
 rule sanity(method f)
 {

@@ -20,3 +20,5 @@ typechain-types/
 crytic-export/
 
 .certora_internal
+certora_debug_log.txt
+resource_errors.json
