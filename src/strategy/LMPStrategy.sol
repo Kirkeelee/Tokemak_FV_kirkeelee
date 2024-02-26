@@ -438,7 +438,6 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
                 }
             }
         }
-        
 
         // In Destination
         dest = IDestinationVault(params.destinationIn);
