@@ -28,7 +28,7 @@ The Formal Verification (FV) component of the contest is about using the Certora
   - Search the [docs](https://docs.certora.com/en/latest/index.html) for any additional information.
   - Check out some of our [examples](https://www.github.com/certora/examples).
 - **Contest Participation**:
-  - [Import](https://github.com/new/import) the public repository into a new private repository at the contest's commencement.
+  - [Import](https://github.com/new/import) this public repository into a new private repository at the contest's commencement.
   - Conduct verifications on the master branch.
     - You can work in a separate branch and merge changes at the end if you prefer.  
   - Grant access to `teryanarmen` and `nd-certora` for judging.
