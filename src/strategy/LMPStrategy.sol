@@ -372,7 +372,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         // Get the price of one unit of the underlying lp token, the params.tokenOut/tokenIn
         // Prices are calculated using the spot of price of the constituent tokens
         // validated to be within a tolerance of the safe price of those tokens
-        uint256 outPrice = IDestinationVault(params.destinationOut).getValidatedSpotPrice();
+        uint256 outPrice = params.destinationOut != lmpVaultAddress
+            ? IDestinationVault(params.destinationOut).getValidatedSpotPrice()
+            : 10 ** tokenOutDecimals;
 
         // Prices are all in terms of the base asset, so when its a rebalance back to the vault
         // We can just take things as 1:1
@@ -381,7 +383,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
             : 10 ** tokenInDecimals;
 
         // prices are 1e18 and we want values in 1e18, so divide by token decimals
-        uint256 outEthValue = outPrice * params.amountOut / 10 ** tokenOutDecimals;
+        uint256 outEthValue = params.destinationOut != lmpVaultAddress
+            ? outPrice * params.amountOut / 10 ** tokenOutDecimals
+            : params.amountOut;
 
         // amountIn is a minimum to receive, but it is OK if we receive more
         uint256 inEthValue = params.destinationIn != lmpVaultAddress
@@ -412,7 +416,8 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
         address[] memory lstTokens = dest.underlyingTokens();
         uint256 numLsts = lstTokens.length;
         address dvPoolAddress = dest.getPool();
-        for (uint256 i = 0; i < numLsts; ++i) {
+        if (address(dest) == address(lmpVault)) {
+            for (uint256 i = 0; i < numLsts; ++i) {
             uint256 priceSafe = pricer.getPriceInEth(lstTokens[i]);
             uint256 priceSpot = pricer.getSpotPriceInEth(lstTokens[i], dvPoolAddress);
             // For out destination, the pool tokens should not be lower than safe price by tolerance
@@ -421,7 +426,9 @@ contract LMPStrategy is ILMPStrategy, SecurityBase {
                     return false;
                 }
             }
+            }
         }
+        
 
         // In Destination
         dest = IDestinationVault(params.destinationIn);

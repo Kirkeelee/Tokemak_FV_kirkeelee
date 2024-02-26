@@ -1,7 +1,10 @@
 import "./complexity.spec";
+import "./vaultSummaries.spec";
 
-use builtin rule sanity;
-use rule privilegedOperation;
+// using LMPVault as Vault;
+using BalancerAuraDestinationVault as BalancerDestVault;
+using CurveConvexDestinationVault as CurveDestVault;
+using SystemRegistry as systemRegistry;
 
 methods {
     function _.getPriceInEth(address token) external with (env e) => getPriceInEthCVL[token][e.block.timestamp] expect (uint256);
@@ -21,8 +24,64 @@ methods {
     function swapCostOffsetTightenThresholdInViolations() external returns (uint16) envfree;
     function swapCostOffsetMaxInDays() external returns (uint16) envfree;
     function swapCostOffsetMinInDays() external returns (uint16) envfree;
+    function navTrackingState() external returns (uint8, uint8, uint40) envfree;
+    function lastRebalanceTimestamp() external returns (uint40) envfree;
+    function lmpVault() external returns (address) envfree;
+
+    // harness functions
+    // function getDestinationSummaryStatsExternal(address, uint256, LMPStrategy.RebalanceDirection, uint256) external returns (IStrategy.SummaryStats);
+    function getSwapCostOffsetTightenThresholdInViolations() external returns (uint16) envfree;
+
+    // function Vault.isDestinationRegistered(address) external returns (bool) envfree;
+    // function Vault.isDestinationQueuedForRemoval(address) external returns (bool) envfree;
+    // function Vault.asset() external returns (address) envfree;
+
+    function BalancerDestVault.underlying() external returns (address) envfree;
+    function CurveDestVault.underlying() external returns (address) envfree;
+
+    // function LMPStrategy.getRebalanceInSummaryStats(IStrategy.RebalanceParams memory input) internal returns (IStrategy.SummaryStats memory) => getRebalanceInSummaryStatsCVL(input);
+
+    function LMPStrategy.getDestinationSummaryStats(address destAddress,uint256 price,LMPStrategy.RebalanceDirection direction,uint256 amount) internal returns (IStrategy.SummaryStats memory) => getDestinationSummaryStatsCVL(destAddress, price, direction, amount);
+    
+    function LMPStrategy.getRebalanceValueStats(IStrategy.RebalanceParams memory input) internal returns (LMPStrategy.RebalanceValueStats memory) => getRebalanceValueStatsCVL(input);
 }
 
+/////// Functions
+
+    function getRebalanceInSummaryStatsCVL(IStrategy.RebalanceParams input) returns IStrategy.SummaryStats {
+        IStrategy.SummaryStats tmp;
+        return tmp;
+    }
+
+    function getRebalanceValueStatsCVL(IStrategy.RebalanceParams input) returns LMPStrategy.RebalanceValueStats {
+        LMPStrategy.RebalanceValueStats tmp;
+        return tmp;
+    }
+
+    function getDestinationSummaryStatsCVL(address destAddress, uint256 price, LMPStrategy.RebalanceDirection direction, uint256 amount) returns IStrategy.SummaryStats {
+        IStrategy.SummaryStats tmp;
+        return tmp;
+    }
+
+
+// function getDestinationSummaryStatsCVL(
+//     address destAddress,
+//     uint256 price,
+//     LMPStrategy.RebalanceDirection direction,
+//     uint256 amount
+// ) returns IStrategy.SummaryStats {
+//     IStrategy.SummaryStats tmp;
+//     require tmp.compositeReturn == compositeReturnGhost[destAddress][price][direction][amount];
+//     return tmp;
+// }
+
+// ghost mapping(address => mapping(uint256 => mapping(LMPStrategy.RebalanceDirection => mapping(uint256 => int256)))) compositeReturnGhost;
+
+use builtin rule sanity;
+
+use rule privilegedOperation;
+
+use rule 
 
 ghost uint256 getBptIndexCVL;
 
@@ -56,6 +115,70 @@ hook Sstore currentContract.violationTrackingState.violationCount uint8 defaultV
 
 
 // STATUS - verified
+// offset period should be between swapCostOffsetMaxInDays and swapCostOffsetMinInDays
+invariant offsetIsInBetween()
+    _swapCostOffsetPeriodGhost <= swapCostOffsetMaxInDays() && _swapCostOffsetPeriodGhost >= swapCostOffsetMinInDays();
+
+
+
+// // STATUS - verified
+// // if rebalance successful && strategy is paused => must be rebalance back to idle
+// rule pausedStrategyVerifiesIdle(env e) {
+//     IStrategy.RebalanceParams params;
+//     IStrategy.SummaryStats outSummary;
+
+//     bool pausedBefore = paused(e);
+//     address destIn = params.destinationIn;
+
+//     calldataarg args;
+//     verifyRebalance@withrevert(e, params, outSummary);
+//     bool isReverted = lastReverted;
+
+//     assert pausedBefore && !isReverted => destIn == Vault;
+// }
+
+
+
+// // STATUS - verified
+// // if rebalance successful && not rebalance to idle => not paused
+// rule successfulNotPaused(env e) {
+//     IStrategy.RebalanceParams params;
+//     IStrategy.SummaryStats outSummary;
+
+//     bool pausedBefore = paused(e);
+//     address destIn = params.destinationIn;
+
+//     calldataarg args;
+//     verifyRebalance@withrevert(e, params, outSummary);
+//     bool isReverted = lastReverted;
+
+//     assert destIn != Vault && !isReverted => !pausedBefore;
+// }
+
+/*
+
+// STATUS - verified
+// violationTrackingState.len cant exceed 10
+rule noVioLenThanTen(env e, method f) {
+    uint8 lenBefore;
+    uint8 lenAfter;
+    
+    _,lenBefore,_ = violationTrackingState();
+
+    require lenBefore <= 10;
+
+    calldataarg args;
+    f(e, args);
+
+    _,lenAfter,_ = violationTrackingState();
+
+    assert lenAfter <= 10;
+}
+
+
+
+// STATUS - verified
+// violationTrackingState.violationCount can be increased only by 1 at a time
 rule cantJumpTwoViolationsAtOnce(env e, method f) {
     uint16 numOfViolationsBefore;
     numOfViolationsBefore,_,_ = violationTrackingState();
