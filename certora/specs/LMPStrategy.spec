@@ -16,7 +16,7 @@ methods {
     function _.addToWithdrawalQueueHead(address) external => NONDET;
     function _.addToWithdrawalQueueTail(address) external => NONDET;
     function _.totalIdle() external => totalIdleCVL expect uint256;
-    function _.asset() external => assetCVL expect uint256;
+    function _.asset() external => assetCVL expect address;
     function _.totalAssets() external => totalAssetsCVL expect uint256;
     function _.isDestinationRegistered(address dest) external => isDestinationRegisteredCVL[dest] expect bool;
     function _.isDestinationQueuedForRemoval(address dest) external => isDestinationQueuedForRemovalCVL[dest] expect bool;
@@ -61,8 +61,25 @@ methods {
     // Harnessed
     function getDestinationSummaryStatsExternal(address, uint256, LMPStrategy.RebalanceDirection, uint256) external returns (IStrategy.SummaryStats);
     function getSwapCostOffsetTightenThresholdInViolations() external returns (uint16) envfree;
+
+    
 }
 
+function getParams() returns IStrategy.RebalanceParams {
+    IStrategy.RebalanceParams tmp;
+    return tmp;
+}
+
+function getOutSummary() returns IStrategy.SummaryStats {
+    IStrategy.SummaryStats tmp;
+    return tmp;
+}
+
+
+function getRebalanceDirection() returns LMPStrategy.RebalanceDirection {
+    LMPStrategy.RebalanceDirection tmp;
+    return tmp;
+}
 /** Functions **/
 // For base summaries
 function getRebalanceValueStatsCVL(IStrategy.RebalanceParams input) returns LMPStrategy.RebalanceValueStats {
@@ -91,7 +108,7 @@ ghost mapping(address => mapping(uint256 => uint256)) getPriceInEthCVL;
 
 // For vault summaries
 ghost uint256 totalIdleCVL;
-ghost uint256 assetCVL;
+ghost address assetCVL;
 ghost uint256 totalAssetsCVL;
 
 ghost mapping(address => bool) isDestinationRegisteredCVL;
@@ -130,3 +147,66 @@ rule cantJumpTwoViolationsAtOnce(env e, method f) {
 
     assert numOfViolationsAfter - numOfViolationsBefore <= 1;
 }
+
+//rule for checking the revert conditions on function Verifyrebalance()
+rule revertingconditionsVerifyrebalance (env e) {
+    uint256 inPrice;
+    LMPStrategy.RebalanceDirection RebalanceDirection = getRebalanceDirection();
+    IStrategy.RebalanceParams params = getParams();
+    IStrategy.SummaryStats outSummary = getOutSummary();
+    IStrategy.SummaryStats inSummary = getDestinationSummaryStatsExternal(e, params.destinationIn, inPrice, LMPStrategy.RebalanceDirection.In, params.amountIn);
+    uint256 tolerance = getlstPriceGapTolerance(e);
+    require tolerance !=0;
+    address lmpVault = getlmpVault(e);
+    require lmpVault != params.destinationIn;
+    int256 maxDiscount = getmaxDiscount(e);
+    int256 maxPremium = getmaxPremium(e);
+    
+    bool paused = paused(e); 
+    bool verifypricegap = verifyLSTPriceGapExternal(e, params, tolerance);
+
+    verifyRebalance@withrevert(e, params, outSummary);
+   
+    assert paused || !verifypricegap || inSummary.maxDiscount > maxDiscount ||(assert_int256(-inSummary.maxPremium) > maxPremium) => lastReverted;
+}
+
+rule revertingConditionsValidateParams (env e) {
+    IStrategy.RebalanceParams params = getParams();
+    IStrategy.SummaryStats outSummary = getOutSummary();
+
+
+    bool DStInRegistered = isDestinationRegisteredCVL[params.destinationIn];
+    bool DStOutRegistered = isDestinationRegisteredCVL[params.destinationOut];
+    address lmpVault = getlmpVault(e);
+    require lmpVault != params.destinationIn && lmpVault != params.destinationOut;
+
+   
+      
+    verifyRebalance@withrevert(e, params, outSummary);
+
+       
+    assert params.destinationIn == 0 || params.destinationOut == 0 || 
+    params.tokenIn == 0 || params.tokenOut == 0 || params.amountIn == 0 || params.amountOut == 0 || !DStInRegistered || 
+    !DStOutRegistered => lastReverted;
+}
+
+
+rule revertingConditionsValidateParams2 (env e) {
+    IStrategy.RebalanceParams params = getParams();
+    IStrategy.SummaryStats outSummary = getOutSummary();
+
+
+    address lmpVault = getlmpVault(e);
+    require lmpVault != params.destinationIn && lmpVault != params.destinationOut;
+    address baseAsset = assetCVL;
+
+   
+      
+    verifyRebalance@withrevert(e, params, outSummary);
+
+       
+    assert params.destinationIn == params.destinationOut || params.destinationIn == lmpVault && params.tokenIn != baseAsset ||
+    params.destinationOut == lmpVault && params.tokenIn != baseAsset || params.destinationOut == lmpVault && params.amountOut > totalIdleCVL => lastReverted;
+
+}
+

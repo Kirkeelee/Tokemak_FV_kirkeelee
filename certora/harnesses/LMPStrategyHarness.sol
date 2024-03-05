@@ -13,8 +13,31 @@ contract LMPStrategyHarness is LMPStrategy{
     function getDestinationSummaryStatsExternal(address destAddress, uint256 price, RebalanceDirection direction, uint256 amount) external returns (IStrategy.SummaryStats memory){
         return getDestinationSummaryStats(destAddress, price, direction, amount);
     }
+    function verifyLSTPriceGapExternal(IStrategy.RebalanceParams memory params, uint256 tolerance) external returns (bool) {
+        return verifyLSTPriceGap (params, tolerance);
+    }
 
     function getSwapCostOffsetTightenThresholdInViolations() external returns (uint16){
         return swapCostOffsetTightenThresholdInViolations;
+    }
+    
+     function getlstPriceGapTolerance() external returns (uint256){
+        return lstPriceGapTolerance;
+    }
+
+    function getlastPausedTimestamp() external returns (uint40){
+        return lastPausedTimestamp;
+    }
+
+     function getlmpVault() external returns (ILMPVault){
+        return lmpVault;
+    }
+
+     function getmaxDiscount() external returns (int256){
+        return maxDiscount;
+    }
+
+      function getmaxPremium() external returns (int256){
+        return maxPremium;
     }
 } 
