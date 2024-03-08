@@ -28,7 +28,7 @@ methods {
 
     // Can help reduce complexity, think carefully about implications before using.
     // May need to think of a more clever way to summarize this.
-    // function LMPStrategy.getRebalanceValueStats(IStrategy.RebalanceParams memory input) internal returns (LMPStrategy.RebalanceValueStats memory) => getRebalanceValueStatsCVL(input);
+    //function LMPStrategy.getRebalanceValueStats(IStrategy.RebalanceParams memory input) internal returns (LMPStrategy.RebalanceValueStats memory); // => getRebalanceValueStatsCVL(input);
     
     /** Dispatchers **/
     // base
@@ -56,11 +56,13 @@ methods {
     /** Envfree **/
     // Base
     function violationTrackingState() external returns (uint8, uint8, uint16) envfree;
+    function navTrackingState() external returns (uint8, uint8, uint40) envfree;
     function swapCostOffsetMaxInDays() external returns (uint16) envfree;
     function swapCostOffsetMinInDays() external returns (uint16) envfree;
     // Harnessed
     function getDestinationSummaryStatsExternal(address, uint256, LMPStrategy.RebalanceDirection, uint256) external returns (IStrategy.SummaryStats);
     function getSwapCostOffsetTightenThresholdInViolations() external returns (uint16) envfree;
+    
 
     
 }
@@ -75,6 +77,11 @@ function getOutSummary() returns IStrategy.SummaryStats {
     return tmp;
 }
 
+function getnavTrackingState() returns NavTracking.State {
+    NavTracking.State tmp;
+    return tmp;
+}
+
 
 function getRebalanceDirection() returns LMPStrategy.RebalanceDirection {
     LMPStrategy.RebalanceDirection tmp;
@@ -82,10 +89,11 @@ function getRebalanceDirection() returns LMPStrategy.RebalanceDirection {
 }
 /** Functions **/
 // For base summaries
+/*
 function getRebalanceValueStatsCVL(IStrategy.RebalanceParams input) returns LMPStrategy.RebalanceValueStats {
     LMPStrategy.RebalanceValueStats tmp;
     return tmp;
-}
+} */
 
 // For vault summaries
 function getDestinationInfoCVL(address dest) returns LMPDebt.DestinationInfo {
@@ -97,6 +105,8 @@ function currentCVL() returns IDexLSTStats.DexLSTStatsData {
     IDexLSTStats.DexLSTStatsData data;
     return data;
 }
+
+definition DAY() returns uint40 = 86400;
 
 /** Ghosts and Hooks **/
 // For base summaries
@@ -162,6 +172,8 @@ rule revertingconditionsVerifyrebalance (env e) {
     int256 maxDiscount = getmaxDiscount(e);
     int256 maxPremium = getmaxPremium(e);
     
+
+    
     bool paused = paused(e); 
     bool verifypricegap = verifyLSTPriceGapExternal(e, params, tolerance);
 
@@ -207,6 +219,113 @@ rule revertingConditionsValidateParams2 (env e) {
        
     assert params.destinationIn == params.destinationOut || params.destinationIn == lmpVault && params.tokenIn != baseAsset ||
     params.destinationOut == lmpVault && params.tokenIn != baseAsset || params.destinationOut == lmpVault && params.amountOut > totalIdleCVL => lastReverted;
+
+}
+
+rule rebalanceSuccess (env e) {
+
+    IStrategy.RebalanceParams params = getParams();
+    address lmpVault = getlmpVault(e);
+
+    require params.destinationIn != lmpVault;
+
+    rebalanceSuccessfullyExecuted(e, params);
+
+    uint40 NewRebalance = getlastRebalanceTimestamp(e);
+
+
+    assert NewRebalance == require_uint40 (e.block.timestamp);
+
+}
+
+
+rule revertingconditionsVerifyToIdle (env e) {
+    IStrategy.RebalanceParams params = getParams();
+    IStrategy.SummaryStats outSummary = getOutSummary();
+    LMPStrategy.RebalanceValueStats  valueStats = getRebalanceValueStatsExternal(e, params);
+    address lmpVault = getlmpVault(e);
+    require lmpVault == params.destinationIn;
+    uint256 maxShutdownOperationSlippage = getmaxShutdownOperationSlippage(e);
+    uint256 maxEmergencyOperationSlippage = getmaxEmergencyOperationSlippage(e);
+    uint256 maxTrimOperationSlippage = getmaxTrimOperationSlippage(e);
+    uint256 maxNormalOperationSlippage = getmaxNormalOperationSlippage(e);
+    require valueStats.slippage > maxEmergencyOperationSlippage && valueStats.slippage > maxShutdownOperationSlippage &&
+    valueStats.slippage > maxNormalOperationSlippage && valueStats.slippage > maxTrimOperationSlippage;
+    bool isDestinationQueuedForRemoval = isDestinationQueuedForRemovalCVL[params.destinationOut];
+    require isDestinationQueuedForRemoval == true;
+    uint256 staleDataToleranceInSecond = require_uint256(getstaleDataToleranceInSeconds(e));
+    uint256 dataTimestamp;
+    require staleDataToleranceInSecond >= require_uint256(e.block.timestamp - dataTimestamp);
+
+    verifyRebalance@withrevert(e, params, outSummary);
+
+
+    
+    assert valueStats.slippage > maxShutdownOperationSlippage || valueStats.slippage > maxEmergencyOperationSlippage ||
+    valueStats.slippage > maxTrimOperationSlippage || valueStats.slippage > maxNormalOperationSlippage => lastReverted;
+}
+
+rule NoChangetolastRebalanceTimestamp(env e, method f) filtered {
+   f -> f.selector != sig:rebalanceSuccessfullyExecuted(IStrategy.RebalanceParams).selector
+   }{
+  
+   uint40 OldRebalance = getlastRebalanceTimestamp(e);
+   calldataarg args;
+   f(e, args);
+
+   uint40 NewRebalance = getlastRebalanceTimestamp(e);
+
+   assert NewRebalance == OldRebalance;
+
+}
+
+
+
+rule succesfullNavUpdate (env e, uint256 navPerShare) {
+   
+
+   uint40 FinalizedBefore;
+   uint40 FinalizedAfter;
+
+   _,_,FinalizedBefore = navTrackingState();
+   
+
+   navUpdate(e, navPerShare);
+
+   _,_,FinalizedAfter = navTrackingState();
+    
+
+   assert FinalizedBefore <= FinalizedAfter;
+
+
+}
+
+rule NoChangeToNavparams (env e, method f) filtered {
+   f -> f.selector != sig:navUpdate(uint256).selector
+   }{
+   
+
+   uint40 FinalizedBefore;
+   uint40 FinalizedAfter;
+   uint8 lenBefore;
+   uint8 lenAfter;
+   uint8 currentIndexBefore;
+   uint8 currentIndexAfter;
+
+   lenBefore,currentIndexBefore,FinalizedBefore = navTrackingState();
+   
+
+   calldataarg args;
+   f(e, args);
+
+   lenAfter,currentIndexAfter,FinalizedAfter = navTrackingState();
+    
+
+   assert FinalizedBefore == FinalizedAfter;
+   assert lenBefore == lenAfter;
+   assert currentIndexBefore == currentIndexAfter;
+
+
 
 }
 

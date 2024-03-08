@@ -17,6 +17,15 @@ contract LMPStrategyHarness is LMPStrategy{
         return verifyLSTPriceGap (params, tolerance);
     }
 
+    function getRebalanceValueStatsExternal(IStrategy.RebalanceParams memory params) external returns (RebalanceValueStats memory) {
+        return getRebalanceValueStats(params);
+    }
+
+    function validateRebalanceParamsExternal(IStrategy.RebalanceParams memory params) external view {
+        return validateRebalanceParams(params);
+    }
+
+
     function getSwapCostOffsetTightenThresholdInViolations() external returns (uint16){
         return swapCostOffsetTightenThresholdInViolations;
     }
@@ -40,4 +49,32 @@ contract LMPStrategyHarness is LMPStrategy{
       function getmaxPremium() external returns (int256){
         return maxPremium;
     }
+
+    function getlastRebalanceTimestamp() external returns (uint40){
+        return lastRebalanceTimestamp;
+    }
+
+    function getmaxNormalOperationSlippage() external returns (uint256){
+        return maxNormalOperationSlippage;
+    }
+
+    function getmaxTrimOperationSlippage() external returns (uint256){
+        return maxTrimOperationSlippage;
+    }
+
+    function getmaxEmergencyOperationSlippage() external returns (uint256){
+        return maxEmergencyOperationSlippage;
+    }
+
+    function getmaxShutdownOperationSlippage() external returns (uint256){
+        return maxShutdownOperationSlippage;
+    }
+
+     function getstaleDataToleranceInSeconds() external returns (uint40){
+        return staleDataToleranceInSeconds;
+    }
+
+   
+
+
 } 
