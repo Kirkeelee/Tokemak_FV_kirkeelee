@@ -182,6 +182,7 @@ rule revertingconditionsVerifyrebalance (env e) {
     assert paused || !verifypricegap || inSummary.maxDiscount > maxDiscount ||(assert_int256(-inSummary.maxPremium) > maxPremium) => lastReverted;
 }
 
+//Testing ValidateParams path of the verifyRebalance() for succesfull reverts.
 rule revertingConditionsValidateParams (env e) {
     IStrategy.RebalanceParams params = getParams();
     IStrategy.SummaryStats outSummary = getOutSummary();
@@ -202,7 +203,7 @@ rule revertingConditionsValidateParams (env e) {
     !DStOutRegistered => lastReverted;
 }
 
-
+// continuation of the above rule.
 rule revertingConditionsValidateParams2 (env e) {
     IStrategy.RebalanceParams params = getParams();
     IStrategy.SummaryStats outSummary = getOutSummary();
@@ -222,6 +223,7 @@ rule revertingConditionsValidateParams2 (env e) {
 
 }
 
+// Testing the rebalanceSuccessfullyExecuted().
 rule rebalanceSuccess (env e) {
 
     IStrategy.RebalanceParams params = getParams();
@@ -238,12 +240,13 @@ rule rebalanceSuccess (env e) {
 
 }
 
-
+// Testing the reverting conditions for VerifyToIdle() path of verifyRebalance().
 rule revertingconditionsVerifyToIdle (env e) {
     IStrategy.RebalanceParams params = getParams();
     IStrategy.SummaryStats outSummary = getOutSummary();
     LMPStrategy.RebalanceValueStats  valueStats = getRebalanceValueStatsExternal(e, params);
     address lmpVault = getlmpVault(e);
+    //to ensure only checks VerifyToIdle()
     require lmpVault == params.destinationIn;
     uint256 maxShutdownOperationSlippage = getmaxShutdownOperationSlippage(e);
     uint256 maxEmergencyOperationSlippage = getmaxEmergencyOperationSlippage(e);
@@ -265,6 +268,7 @@ rule revertingconditionsVerifyToIdle (env e) {
     valueStats.slippage > maxTrimOperationSlippage || valueStats.slippage > maxNormalOperationSlippage => lastReverted;
 }
 
+//No other function changes lastRebalanceTimestamp except rebalanceSuccessfullyExecuted().
 rule NoChangetolastRebalanceTimestamp(env e, method f) filtered {
    f -> f.selector != sig:rebalanceSuccessfullyExecuted(IStrategy.RebalanceParams).selector
    }{
@@ -279,27 +283,35 @@ rule NoChangetolastRebalanceTimestamp(env e, method f) filtered {
 
 }
 
-
+//Testing the navUpdate() function, parameters should be higher or same.
 
 rule succesfullNavUpdate (env e, uint256 navPerShare) {
    
 
    uint40 FinalizedBefore;
    uint40 FinalizedAfter;
+   uint8 lenBefore;
+   uint8 lenAfter;
+   uint8 currentIndexBefore;
+   uint8 currentIndexAfter;
 
-   _,_,FinalizedBefore = navTrackingState();
-   
+   lenBefore,currentIndexBefore,FinalizedBefore = navTrackingState();
+   require currentIndexBefore < 90;
 
    navUpdate(e, navPerShare);
 
-   _,_,FinalizedAfter = navTrackingState();
+   lenAfter,currentIndexAfter,FinalizedAfter = navTrackingState();
     
 
    assert FinalizedBefore <= FinalizedAfter;
+   assert lenBefore <= lenAfter;
+   assert currentIndexBefore <= currentIndexAfter;
 
 
 }
 
+
+//No other function changes the navTrackingState parameters except navUpdate().
 rule NoChangeToNavparams (env e, method f) filtered {
    f -> f.selector != sig:navUpdate(uint256).selector
    }{
@@ -325,6 +337,64 @@ rule NoChangeToNavparams (env e, method f) filtered {
    assert lenBefore == lenAfter;
    assert currentIndexBefore == currentIndexAfter;
 
+
+}
+
+//No other function changes Violation tracking parameters except rebalanceSuccessfullyExecuted().
+rule NoChangetoViolationparams(env e, method f) filtered {
+   f -> f.selector != sig:rebalanceSuccessfullyExecuted(IStrategy.RebalanceParams).selector
+   }{
+  
+    uint16 ViolationsBefore;
+    uint8 violationCountBefore;
+    uint8 lenBefore;
+
+    uint16 ViolationsAfter;
+    uint8 violationCountAfter;
+    uint8 lenAfter;
+
+    violationCountBefore,lenBefore,ViolationsBefore = violationTrackingState();
+
+    calldataarg args;
+    f(e, args);
+
+    violationCountAfter,lenAfter,ViolationsAfter = violationTrackingState();
+
+    assert ViolationsBefore == ViolationsAfter;
+    assert violationCountBefore == violationCountAfter;
+    assert lenBefore == lenAfter;
+
+}
+
+
+// Testing the rebalanceSuccessfullyExecuted().
+rule rebalanceSuccessAndViolationTracking (env e) {
+
+    IStrategy.RebalanceParams params = getParams();
+    address lmpVault = getlmpVault(e);
+    uint16 ViolationsBefore;
+    uint8 violationCountBefore;
+    uint8 lenBefore;
+    uint16 ViolationsAfter;
+    uint8 violationCountAfter;
+    uint8 lenAfter;
+    uint16 swapCostOffsetTightenThresholdInViolations = getSwapCostOffsetTightenThresholdInViolations();
+
+    
+
+
+    violationCountBefore,lenBefore,ViolationsBefore = violationTrackingState();
+    require lenBefore <9;
+    require swapCostOffsetTightenThresholdInViolations !=0;
+
+    require params.destinationOut != lmpVault && params.destinationIn != lmpVault;
+
+    rebalanceSuccessfullyExecuted(e, params);
+
+    violationCountAfter,lenAfter,ViolationsAfter = violationTrackingState();
+
+   
+    assert lenBefore != lenAfter;
 
 
 }
